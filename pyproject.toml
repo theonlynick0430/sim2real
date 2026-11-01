@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "s2r"
+version = "0.1.0"
+description = "Robot-agnostic sim-to-real infrastructure on MuJoCo (CPU) and MuJoCo Warp (GPU)"
+requires-python = ">=3.10"
+# mujoco and mujoco-warp move fast (e.g. qM -> CSR M rename); pin together and
+# guard with tests/test_api_contract.py when bumping.
+dependencies = [
+  "mujoco==3.17.0",
+  "mujoco-warp==3.17.0",
+  "warp-lang==1.18.0",
+  "numpy",
+]
+
+[project.optional-dependencies]
+torch = ["torch"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["s2r*"]
+
+[tool.setuptools.package-data]
+s2r = ["assets/**/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
