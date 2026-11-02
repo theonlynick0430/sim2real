@@ -5,26 +5,59 @@ Robot-agnostic sim-to-real infrastructure on **MuJoCo C (CPU)** and **MuJoCo War
 - The default robot is the I2RT YAM; its model is vendored from MuJoCo Menagerie under the MIT license.
 - Tasks: single-arm pick-and-place, and a bimanual YAM relay (left arm hands the cube to the right arm via a handoff spot).
 
-## Quick start
+## How to run
 
+**1. Install** (Python ≥ 3.10; from the repo root):
 ```bash
-python -m venv .venv && .venv/bin/pip install -e ".[dev]"     # pins mujoco / mujoco-warp 3.17.0, warp 1.18.0
-.venv/bin/python -m pytest                                     # 22 tests; MJWarp tests use CUDA if present, else Warp-CPU
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"            # pins mujoco / mujoco-warp 3.17.0, warp-lang 1.18.0
+```
 
-# CPU (macOS): viewer + scripted motion  (macOS passive viewer needs `mjpython`)
-.venv/bin/mjpython examples/cpu_viewer.py --controller osc     # or impedance | pd
-.venv/bin/mjpython examples/scripted_pick.py                   # OSC pick-and-place, MuJoCo C
-.venv/bin/mjpython examples/bimanual_relay.py                  # two YAMs, OSC on both arms
+**2. Test** — 22 tests, ~45 s on a Mac. MJWarp tests use CUDA if present, else Warp-CPU:
+```bash
+python -m pytest
+```
 
-# GPU: same scripted pick on MJWarp, batched RL env rollout, throughput sweep
+**3. Run on CPU (any machine; MuJoCo C + viewer)** — on macOS the viewer needs `mjpython` instead of `python`:
+```bash
+mjpython examples/cpu_viewer.py --controller osc    # hold/track with osc | impedance | pd
+mjpython examples/scripted_pick.py                  # single-arm OSC pick-and-place
+mjpython examples/bimanual_relay.py                 # two YAMs hand off the cube
+python examples/scripted_pick.py --headless         # no viewer (remote / CI)
+```
+
+**4. Run on GPU (NVIDIA; MJWarp, many worlds)** — add `--device cpu` to any of these to debug on a Mac:
+```bash
 python examples/scripted_pick.py --backend warp --nworld 1024 --headless
-python examples/gpu_rollout.py --nworld 4096                   # add --device cpu to debug on a Mac
-python examples/gpu_rollout.py --nworld 4096 --bimanual        # bimanual relay env + expert
 python examples/bimanual_relay.py --backend warp --nworld 1024 --headless
-python examples/gpu_bench.py --nworld 1024 65536 262144 1048576   # add --bimanual for two arms per world
+python examples/gpu_rollout.py --nworld 4096 [--bimanual]          # batched RL env + scripted expert
+python examples/gpu_bench.py --nworld 1024 65536 262144 1048576 [--bimanual]   # throughput / memory sweep
+```
+
+**5. Real robot** — implement `RobotHardware.read/command` for your SDK (see `sim2real/real/driver.py`;
+`I2RTYamHardware` is a stub), then:
+```python
+from sim2real.real.driver import RealArm, RealControlLoop
+RealControlLoop([RealArm(mount, hardware, controller)], rate_hz=500).run(seconds=10)
 ```
 
 > **macOS note:** Python 3.12 ignores `.pth` files that carry the `hidden` flag. On some setups the editable install ends up hidden, and then `import sim2real` fails. The examples add the repo to `sys.path` themselves, and pytest sets `pythonpath`.
+
+## Agent skills
+
+`.claude/skills/` holds project skills that give coding agents (e.g. Claude Code) the context to extend this
+repo. They're checked in, so everyone who clones the repo gets them, and they contain no user- or machine-specific paths.
+
+| skill | covers |
+|---|---|
+| `sim2real-architecture` | module map, invariants, how to verify changes — start here |
+| `sim2real-robot-config` | adding robots (`RobotConfig`), scene building, actuator modes, multi-arm mounts |
+| `sim2real-controllers` | writing controllers as Warp kernels, equations, testing |
+| `sim2real-backends` | CPU/MJWarp backends, `RobotState` filling, validated MJWarp API, CUDA graphs, perf |
+| `sim2real-envs` | batched RL env structure, obs/action/reward/reset, scripted experts |
+| `sim2real-real-robot` | hardware contract, dynamics model, control loop, wiring an SDK |
+
+Keep them in sync when you change the corresponding code.
 
 ## Layout
 
