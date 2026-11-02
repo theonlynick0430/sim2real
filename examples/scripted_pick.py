@@ -14,11 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run without `pip
 
 import numpy as np
 
-from s2r.control import OSC
-from s2r.envs.scripted import TOP_DOWN_QUAT, ScriptedPickPlace
-from s2r.robots import ActuatorMode, get_robot
-from s2r.sim.backend import make_backend
-from s2r.sim.scene import build_scene
+from sim2real.control import OSC
+from sim2real.envs.scripted import TOP_DOWN_QUAT, ScriptedPickPlace
+from sim2real.robots import ActuatorMode, get_robot
+from sim2real.sim.backend import make_backend
+from sim2real.sim.scene import build_scene
 
 
 def main():

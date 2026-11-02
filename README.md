@@ -24,12 +24,12 @@ python examples/bimanual_relay.py --backend warp --nworld 1024 --headless
 python examples/gpu_bench.py --nworld 1024 65536 262144 1048576   # add --bimanual for two arms per world
 ```
 
-> **macOS note:** Python 3.12 ignores `.pth` files that carry the `hidden` flag. On some setups the editable install ends up hidden, and then `import s2r` fails. The examples add the repo to `sys.path` themselves, and pytest sets `pythonpath`.
+> **macOS note:** Python 3.12 ignores `.pth` files that carry the `hidden` flag. On some setups the editable install ends up hidden, and then `import sim2real` fails. The examples add the repo to `sys.path` themselves, and pytest sets `pythonpath`.
 
 ## Layout
 
 ```
-s2r/
+sim2real/
   robots/    config.py   RobotConfig (frozen dataclass) + registry; RobotMount (config + prefix + base pose)
              yam.py      YAM config; yam_bimanual() -> two mounts
   sim/       scene.py    MjSpec scene: mounted robot(s) + table + cube + goal; actuator-mode rewrite; contact budget

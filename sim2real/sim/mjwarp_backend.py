@@ -13,11 +13,11 @@ import mujoco_warp as mjw
 import numpy as np
 import warp as wp
 
-from s2r.dynamics import kernels as K
-from s2r.sim.backend import Backend, as_controller_list
-from s2r.sim.robot_view import RobotView
-from s2r.sim.scene import Scene
-from s2r.sim.state import ALL_NEEDS, NEED_J, NEED_M, RobotState
+from sim2real.dynamics import kernels as K
+from sim2real.sim.backend import Backend, as_controller_list
+from sim2real.sim.robot_view import RobotView
+from sim2real.sim.scene import Scene
+from sim2real.sim.state import ALL_NEEDS, NEED_J, NEED_M, RobotState
 
 
 @dataclasses.dataclass

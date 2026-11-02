@@ -1,4 +1,4 @@
-"""Pins the MuJoCo / MJWarp API surface s2r depends on. If this fails after a version bump,
+"""Pins the MuJoCo / MJWarp API surface sim2real depends on. If this fails after a version bump,
 fix the adapters (sim/*_backend.py, dynamics/kernels.py) before anything else."""
 
 import dataclasses

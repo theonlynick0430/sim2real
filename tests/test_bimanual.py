@@ -3,10 +3,10 @@
 import mujoco
 import numpy as np
 
-from s2r.control import OSC
-from s2r.envs.scripted import RELAY_HANDOFF, TOP_DOWN_QUAT, BimanualRelay
-from s2r.real.driver import RealArm, RealControlLoop, RobotDynamicsModel, SimulatedRig
-from s2r.sim.mujoco_backend import MujocoBackend
+from sim2real.control import OSC
+from sim2real.envs.scripted import RELAY_HANDOFF, TOP_DOWN_QUAT, BimanualRelay
+from sim2real.real.driver import RealArm, RealControlLoop, RobotDynamicsModel, SimulatedRig
+from sim2real.sim.mujoco_backend import MujocoBackend
 
 
 def test_scene_structure(yam_bimanual_scene):

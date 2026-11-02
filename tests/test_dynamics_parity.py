@@ -8,8 +8,8 @@ import mujoco_warp as mjw
 import numpy as np
 import pytest
 
-from s2r.sim.mjwarp_backend import MjWarpBackend
-from s2r.sim.mujoco_backend import MujocoBackend
+from sim2real.sim.mjwarp_backend import MjWarpBackend
+from sim2real.sim.mujoco_backend import MujocoBackend
 
 
 @pytest.mark.parametrize("scene_name", ["yam_torque_scene", "yam_bimanual_scene"])

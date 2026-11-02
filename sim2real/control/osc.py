@@ -15,10 +15,10 @@ import functools
 import numpy as np
 import warp as wp
 
-from s2r.control.base import Controller
-from s2r.control.linalg import linalg
-from s2r.robots.config import ActuatorMode
-from s2r.sim.state import ALL_NEEDS, RobotState
+from sim2real.control.base import Controller
+from sim2real.control.linalg import linalg
+from sim2real.robots.config import ActuatorMode
+from sim2real.sim.state import ALL_NEEDS, RobotState
 
 
 @wp.func

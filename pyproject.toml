@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "s2r"
+name = "sim2real"
 version = "0.1.0"
 description = "Robot-agnostic sim-to-real infrastructure on MuJoCo (CPU) and MuJoCo Warp (GPU)"
 requires-python = ">=3.10"
@@ -21,10 +21,10 @@ torch = ["torch"]
 dev = ["pytest"]
 
 [tool.setuptools.packages.find]
-include = ["s2r*"]
+include = ["sim2real*"]
 
 [tool.setuptools.package-data]
-s2r = ["assets/**/*"]
+sim2real = ["assets/**/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

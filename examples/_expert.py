@@ -110,7 +110,7 @@ def launch_expert(env, action, hover: float = 0.10):
               inputs=[env.obs, env.step_count, env.cfg.action_scale, hover, L.tcp(0), L.cube, L.goal],
               outputs=[action], device=env.device)
   elif env.narm == 2:
-    from s2r.envs.scripted import RELAY_HANDOFF
+    from sim2real.envs.scripted import RELAY_HANDOFF
 
     wp.launch(relay_expert_kernel, dim=env.nworld,
               inputs=[env.obs, env.step_count, env.cfg.action_scale, hover, L.tcp(0), L.tcp(1), L.cube, L.goal,

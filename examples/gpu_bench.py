@@ -14,8 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import warp as wp
 
 from examples._scenes import make_scene
-from s2r.envs.pick_place import PickPlaceEnv
-from s2r.sim.mjwarp_backend import MjWarpBackend
+from sim2real.envs.pick_place import PickPlaceEnv
+from sim2real.sim.mjwarp_backend import MjWarpBackend
 
 
 def bench(scene, nworld, device, steps):

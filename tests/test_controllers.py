@@ -4,10 +4,10 @@ import mujoco
 import numpy as np
 import pytest
 
-from s2r.control import OSC, JointImpedance, JointPD
-from s2r.envs.scripted import TOP_DOWN_QUAT, ScriptedPickPlace
-from s2r.robots import ActuatorMode
-from s2r.sim.mujoco_backend import MujocoBackend
+from sim2real.control import OSC, JointImpedance, JointPD
+from sim2real.envs.scripted import TOP_DOWN_QUAT, ScriptedPickPlace
+from sim2real.robots import ActuatorMode
+from sim2real.sim.mujoco_backend import MujocoBackend
 
 
 def _random_state(scene, seed):
@@ -115,7 +115,7 @@ def test_scripted_pick_place_cpu(yam_torque_scene):
 
 def test_real_loop_with_simulated_hardware(yam_torque_scene):
   """Real-robot code path (separate dynamics model + MIT-mode conversion) drives the sim."""
-  from s2r.real.driver import RealArm, RealControlLoop, SimulatedRig
+  from sim2real.real.driver import RealArm, RealControlLoop, SimulatedRig
 
   b = MujocoBackend(yam_torque_scene)
   rig = SimulatedRig(b)

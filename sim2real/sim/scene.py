@@ -15,7 +15,7 @@ from collections.abc import Sequence
 import mujoco
 import numpy as np
 
-from s2r.robots.config import ActuatorMode, RobotConfig, RobotMount
+from sim2real.robots.config import ActuatorMode, RobotConfig, RobotMount
 
 
 @dataclasses.dataclass(frozen=True)

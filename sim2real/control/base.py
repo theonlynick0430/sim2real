@@ -10,9 +10,9 @@ from __future__ import annotations
 import numpy as np
 import warp as wp
 
-from s2r.robots.config import ActuatorMode
-from s2r.sim.robot_view import RobotView
-from s2r.sim.state import RobotState
+from sim2real.robots.config import ActuatorMode
+from sim2real.sim.robot_view import RobotView
+from sim2real.sim.state import RobotState
 
 
 class Controller:

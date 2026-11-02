@@ -15,11 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run without `pip
 
 import numpy as np
 
-from s2r.control import OSC
-from s2r.envs.scripted import RELAY_CUBE_POS, RELAY_GOAL_POS, RELAY_HANDOFF, BimanualRelay
-from s2r.robots import yam_bimanual
-from s2r.sim.backend import make_backend
-from s2r.sim.scene import SceneConfig, build_scene
+from sim2real.control import OSC
+from sim2real.envs.scripted import RELAY_CUBE_POS, RELAY_GOAL_POS, RELAY_HANDOFF, BimanualRelay
+from sim2real.robots import yam_bimanual
+from sim2real.sim.backend import make_backend
+from sim2real.sim.scene import SceneConfig, build_scene
 
 
 def main():

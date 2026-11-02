@@ -1,8 +1,8 @@
 """Scene presets shared by the examples."""
 
-from s2r.envs.scripted import RELAY_CUBE_POS, RELAY_GOAL_POS
-from s2r.robots import get_robot, yam_bimanual
-from s2r.sim.scene import SceneConfig, build_scene
+from sim2real.envs.scripted import RELAY_CUBE_POS, RELAY_GOAL_POS
+from sim2real.robots import get_robot, yam_bimanual
+from sim2real.sim.scene import SceneConfig, build_scene
 
 
 def make_scene(bimanual: bool):

@@ -19,9 +19,9 @@ import mujoco_warp as mjw
 import numpy as np
 import warp as wp
 
-from s2r.control.osc import OSC, quat_wxyz_to_mat
-from s2r.envs.scripted import TOP_DOWN_QUAT
-from s2r.sim.mjwarp_backend import MjWarpBackend
+from sim2real.control.osc import OSC, quat_wxyz_to_mat
+from sim2real.envs.scripted import TOP_DOWN_QUAT
+from sim2real.sim.mjwarp_backend import MjWarpBackend
 
 
 

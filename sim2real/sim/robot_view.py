@@ -12,7 +12,7 @@ import dataclasses
 import mujoco
 import numpy as np
 
-from s2r.robots.config import RobotConfig
+from sim2real.robots.config import RobotConfig
 
 
 @dataclasses.dataclass(frozen=True)

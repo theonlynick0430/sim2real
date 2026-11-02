@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from s2r.robots.config import RobotConfig, RobotMount, register_robot
+from sim2real.robots.config import RobotConfig, RobotMount, register_robot
 
 ASSETS = Path(__file__).resolve().parents[1] / "assets" / "i2rt_yam"
 

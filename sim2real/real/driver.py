@@ -26,11 +26,11 @@ import mujoco
 import numpy as np
 import warp as wp
 
-from s2r.robots.config import ActuatorMode, RobotConfig, RobotMount
-from s2r.sim.mujoco_backend import fill_state_from_mjdata
-from s2r.sim.robot_view import RobotView
-from s2r.sim.scene import compose_robots
-from s2r.sim.state import ALL_NEEDS, RobotState
+from sim2real.robots.config import ActuatorMode, RobotConfig, RobotMount
+from sim2real.sim.mujoco_backend import fill_state_from_mjdata
+from sim2real.sim.robot_view import RobotView
+from sim2real.sim.scene import compose_robots
+from sim2real.sim.state import ALL_NEEDS, RobotState
 
 
 class RobotHardware(abc.ABC):
@@ -75,7 +75,7 @@ class RealArm:
 
   mount: RobotMount
   hardware: RobotHardware
-  controller: object  # s2r.control.Controller
+  controller: object  # sim2real.control.Controller
 
   def __post_init__(self):
     self.model = RobotDynamicsModel(self.mount)

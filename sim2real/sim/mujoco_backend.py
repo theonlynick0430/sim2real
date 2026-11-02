@@ -11,10 +11,10 @@ import mujoco
 import numpy as np
 import warp as wp
 
-from s2r.sim.backend import Backend
-from s2r.sim.robot_view import RobotView
-from s2r.sim.scene import Scene
-from s2r.sim.state import ALL_NEEDS, NEED_BIAS, NEED_J, NEED_M, RobotState
+from sim2real.sim.backend import Backend
+from sim2real.sim.robot_view import RobotView
+from sim2real.sim.scene import Scene
+from sim2real.sim.state import ALL_NEEDS, NEED_BIAS, NEED_J, NEED_M, RobotState
 
 
 def fill_state_from_mjdata(

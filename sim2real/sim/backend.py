@@ -25,9 +25,9 @@ import abc
 import numpy as np
 import warp as wp
 
-from s2r.sim.robot_view import RobotView
-from s2r.sim.scene import Scene
-from s2r.sim.state import ALL_NEEDS, RobotState
+from sim2real.sim.robot_view import RobotView
+from sim2real.sim.scene import Scene
+from sim2real.sim.state import ALL_NEEDS, RobotState
 
 
 class Backend(abc.ABC):
@@ -111,13 +111,13 @@ def as_controller_list(controllers, narm: int) -> list:
 
 def make_backend(kind: str, scene: Scene, nworld: int = 1, **kw) -> Backend:
   if kind == "cpu":
-    from s2r.sim.mujoco_backend import MujocoBackend
+    from sim2real.sim.mujoco_backend import MujocoBackend
 
     if nworld != 1:
       raise ValueError("cpu backend is single-world")
     return MujocoBackend(scene)
   if kind in ("warp", "gpu"):
-    from s2r.sim.mjwarp_backend import MjWarpBackend
+    from sim2real.sim.mjwarp_backend import MjWarpBackend
 
     return MjWarpBackend(scene, nworld=nworld, **kw)
   raise ValueError(f"unknown backend '{kind}' (cpu | warp)")
