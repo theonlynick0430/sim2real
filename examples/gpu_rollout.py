@@ -3,6 +3,7 @@
   python examples/gpu_rollout.py --nworld 4096                 # CUDA
   python examples/gpu_rollout.py --nworld 8 --device cpu       # Warp-CPU (Mac debugging, slow)
   python examples/gpu_rollout.py --nworld 4096 --policy random
+  python examples/gpu_rollout.py --nworld 4096 --bimanual      # two YAMs, relay expert
 """
 
 import argparse
@@ -15,11 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 import warp as wp
 
-from examples._expert import expert_kernel
+from examples._expert import RELAY_STEPS, launch_expert
+from examples._scenes import make_scene
 from s2r.envs.pick_place import PickPlaceConfig, PickPlaceEnv
-from s2r.robots import get_robot
 from s2r.sim.mjwarp_backend import MjWarpBackend
-from s2r.sim.scene import build_scene
 
 
 def main():
@@ -27,17 +27,20 @@ def main():
   ap.add_argument("--nworld", type=int, default=4096)
   ap.add_argument("--device", default=None)
   ap.add_argument("--policy", default="expert", choices=["expert", "random"])
-  ap.add_argument("--steps", type=int, default=250, help="policy steps")
+  ap.add_argument("--steps", type=int, default=None, help="policy steps (default: one expert episode)")
+  ap.add_argument("--bimanual", action="store_true", help="two YAMs (relay task) instead of one")
   args = ap.parse_args()
+  episode = RELAY_STEPS + 40 if args.bimanual else 250
+  args.steps = args.steps or episode
 
-  scene = build_scene(get_robot("yam"))
-  backend = MjWarpBackend(scene, nworld=args.nworld, device=args.device)
-  env = PickPlaceEnv(backend, PickPlaceConfig())
+  backend = MjWarpBackend(make_scene(args.bimanual), nworld=args.nworld, device=args.device)
+  env = PickPlaceEnv(backend, PickPlaceConfig(episode_steps=episode))
   dev = backend.device
-  print(f"device={dev} nworld={args.nworld} graph={backend.use_graph}")
+  print(f"device={dev} nworld={args.nworld} arms={env.narm} obs={env.obs_dim} act={env.action_dim} "
+        f"graph={backend.use_graph}")
 
   with wp.ScopedDevice(dev):
-    action = wp.zeros((args.nworld, 4), dtype=float)
+    action = wp.zeros((args.nworld, env.action_dim), dtype=float)
     succ_any = wp.zeros(args.nworld, dtype=int)
     rng = np.random.default_rng(0)
     obs = env.reset()
@@ -51,10 +54,9 @@ def main():
     t0 = time.time()
     for _ in range(args.steps):
       if args.policy == "expert":
-        wp.launch(expert_kernel, dim=args.nworld, inputs=[env.obs, env.step_count, env.cfg.action_scale, 0.10],
-                  outputs=[action])
+        launch_expert(env, action)
       else:
-        action.assign(rng.uniform(-1, 1, (args.nworld, 4)).astype(np.float32))
+        action.assign(rng.uniform(-1, 1, (args.nworld, env.action_dim)).astype(np.float32))
       obs, rew, done = env.step(action)
       if args.policy == "expert":
         total_success |= env.success.numpy().astype(bool)  # host sync; fine for an example

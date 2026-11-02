@@ -115,13 +115,13 @@ def test_scripted_pick_place_cpu(yam_torque_scene):
 
 def test_real_loop_with_simulated_hardware(yam_torque_scene):
   """Real-robot code path (separate dynamics model + MIT-mode conversion) drives the sim."""
-  from s2r.real.driver import RealControlLoop, SimulatedHardware
+  from s2r.real.driver import RealArm, RealControlLoop, SimulatedRig
 
   b = MujocoBackend(yam_torque_scene)
-  hw = SimulatedHardware(b)
+  rig = SimulatedRig(b)
   osc = OSC(b.view, 1, device="cpu")
   target = np.array([0.32, -0.05, 0.15])
   osc.set_target(target, quat_wxyz=TOP_DOWN_QUAT)
-  loop = RealControlLoop(yam_torque_scene.robot, hw, osc, rate_hz=500)
-  loop.run(3.0, realtime=False)
+  loop = RealControlLoop([RealArm(yam_torque_scene.mounts[0], rig.hardware[0], osc)], rate_hz=500)
+  loop.run(3.0, realtime=False, after_tick=rig.advance)
   assert np.linalg.norm(b.mjd.site(yam_torque_scene.robot.tcp_site).xpos - target) < 0.01

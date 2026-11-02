@@ -64,6 +64,39 @@ class RobotConfig:
   def replace(self, **kw) -> "RobotConfig":
     return dataclasses.replace(self, **kw)
 
+  def prefixed(self, prefix: str) -> "RobotConfig":
+    """Same robot with every model-level name prefixed, matching `MjSpec.attach(prefix=...)`."""
+    if not prefix:
+      return self
+    p = lambda n: prefix + n  # noqa: E731
+    return self.replace(
+      arm_joints=tuple(map(p, self.arm_joints)),
+      arm_actuators=tuple(map(p, self.arm_actuators)),
+      tcp_site=p(self.tcp_site),
+      gripper_actuator=p(self.gripper_actuator) if self.gripper_actuator else None,
+      contact_excludes=tuple((p(a), p(b)) for a, b in self.contact_excludes),
+      extra_sites=tuple((p(n), p(b), pos, quat) for n, b, pos, quat in self.extra_sites),
+    )
+
+
+@dataclasses.dataclass(frozen=True)
+class RobotMount:
+  """One robot instance placed in a scene: config + name prefix + base pose (world frame).
+
+  Multi-arm setups (e.g. bimanual) are a tuple of mounts. The prefix keeps model names unique;
+  the base pose is the calibrated mount on the real rig, so sim and real share one world frame.
+  """
+
+  robot: RobotConfig
+  prefix: str = ""
+  pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+  quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)  # wxyz
+
+  @property
+  def resolved(self) -> RobotConfig:
+    """Config with model-level (prefixed) names, as seen by the compiled scene."""
+    return self.robot.prefixed(self.prefix)
+
 
 _REGISTRY: dict[str, RobotConfig] = {}
 

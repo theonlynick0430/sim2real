@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from s2r.robots.config import RobotConfig, register_robot
+from s2r.robots.config import RobotConfig, RobotMount, register_robot
 
 ASSETS = Path(__file__).resolve().parents[1] / "assets" / "i2rt_yam"
 
@@ -27,3 +27,14 @@ YAM = register_robot(
     contact_excludes=(("lf_rot", "rf_rot"), ("lf_down", "rf_down"), ("lf_rot", "rf_down"), ("lf_down", "rf_rot")),
   )
 )
+
+
+def yam_bimanual(separation: float = 0.4, **overrides) -> tuple[RobotMount, RobotMount]:
+  """Two YAMs side by side, both facing +x, bases `separation` apart along y (left = +y).
+
+  Set `separation` (or build your own mounts) from the calibrated real rig.
+  `overrides` apply to both arms, e.g. `actuator_mode=ActuatorMode.POSITION`.
+  """
+  arm = YAM.replace(**overrides) if overrides else YAM
+  half = separation / 2
+  return (RobotMount(arm, "left/", pos=(0.0, half, 0.0)), RobotMount(arm, "right/", pos=(0.0, -half, 0.0)))

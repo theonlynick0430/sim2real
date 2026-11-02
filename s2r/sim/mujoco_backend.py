@@ -53,8 +53,8 @@ class MujocoBackend(Backend):
     self.mjd = mujoco.MjData(self.mjm)
     self.nworld = 1
     self.device = wp.get_device("cpu")
-    self.view = RobotView.from_model(self.mjm, scene.robot)
-    self.state = RobotState.allocate(1, self.view.ndof, self.device)
+    self.views = tuple(RobotView.from_model(self.mjm, r) for r in scene.robots)
+    self.states = tuple(RobotState.allocate(1, v.ndof, self.device) for v in self.views)
     self._home = self.mjm.key(scene.home_key).id
     self.reset()
 
@@ -70,20 +70,23 @@ class MujocoBackend(Backend):
     mujoco.mj_step2(self.mjm, self.mjd)
 
   # robot I/O
-  def robot_state(self, needs=ALL_NEEDS) -> RobotState:
-    fill_state_from_mjdata(self.mjm, self.mjd, self.view, self.state, needs)
-    return self.state
+  def robot_state(self, needs=ALL_NEEDS, arm: int = 0) -> RobotState:
+    fill_state_from_mjdata(self.mjm, self.mjd, self.views[arm], self.states[arm], needs)
+    return self.states[arm]
 
-  def set_arm_ctrl(self, cmd: wp.array) -> None:
-    self.mjd.ctrl[self.view.act_ids] = cmd.numpy()[0]
+  def set_arm_ctrl(self, cmd: wp.array, arm: int = 0) -> None:
+    self.mjd.ctrl[self.views[arm].act_ids] = cmd.numpy()[0]
 
-  def set_gripper(self, value) -> None:
-    if self.view.gripper_act_id >= 0:
-      self.mjd.ctrl[self.view.gripper_act_id] = float(np.asarray(value).reshape(-1)[0])
+  def set_gripper(self, value, arm: int = 0) -> None:
+    if self.views[arm].gripper_act_id >= 0:
+      self.mjd.ctrl[self.views[arm].gripper_act_id] = float(np.asarray(value).reshape(-1)[0])
 
   # host accessors
   def body_pos(self, name: str) -> np.ndarray:
     return self.mjd.body(name).xpos[None].copy()
+
+  def body_quat(self, name: str) -> np.ndarray:
+    return self.mjd.body(name).xquat[None].copy()
 
   def set_mocap_pos(self, name: str, pos: np.ndarray) -> None:
     self.mjd.mocap_pos[self.mjm.body(name).mocapid[0]] = np.asarray(pos).reshape(-1, 3)[0]

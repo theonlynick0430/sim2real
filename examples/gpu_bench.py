@@ -1,6 +1,7 @@
 """Throughput / memory sweep over nworld for the pick-place env (MJWarp, CUDA graph).
 
   python examples/gpu_bench.py --nworld 1024 8192 65536 262144 1048576
+  python examples/gpu_bench.py --bimanual                    # two YAMs per world
 """
 
 import argparse
@@ -12,17 +13,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import warp as wp
 
+from examples._scenes import make_scene
 from s2r.envs.pick_place import PickPlaceEnv
-from s2r.robots import get_robot
 from s2r.sim.mjwarp_backend import MjWarpBackend
-from s2r.sim.scene import build_scene
 
 
 def bench(scene, nworld, device, steps):
   backend = MjWarpBackend(scene, nworld=nworld, device=device)
   env = PickPlaceEnv(backend)
   with wp.ScopedDevice(backend.device):
-    action = wp.zeros((nworld, 4), dtype=float)
+    action = wp.zeros((nworld, env.action_dim), dtype=float)
     env.reset()
     env.step(action)  # compile + capture
     wp.synchronize_device()
@@ -40,8 +40,9 @@ def main():
   ap.add_argument("--nworld", type=int, nargs="+", default=[1024, 8192, 65536])
   ap.add_argument("--device", default=None)
   ap.add_argument("--steps", type=int, default=50)
+  ap.add_argument("--bimanual", action="store_true", help="two YAMs per world")
   args = ap.parse_args()
-  scene = build_scene(get_robot("yam"))
+  scene = make_scene(args.bimanual)
   print(f"{'nworld':>10} {'physics steps/s':>18} {'mem [GB]':>10} {'KB/world':>10}")
   for n in args.nworld:
     try:
