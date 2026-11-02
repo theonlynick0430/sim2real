@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "2026-10-31.md",
+                "file": "milestones/timeline - 10.31.26.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "2026-10-31"
+              "title": "timeline - 10.31.26"
             }
           }
         ]
@@ -206,9 +206,16 @@
   },
   "active": "dc555ac9c64f06f8",
   "lastOpenFiles": [
-    "Untitled.canvas",
+    "prompts/base env.md",
+    "reading list/controllers.md",
+    "reading list/real2sim.md",
+    "reading list/sim2real rl.md",
+    "milestones/timeline - 10.31.26.md",
+    "reading list",
+    "prompts",
     "2026-10-31.md",
-    "Untitled.md",
+    "Untitled.canvas",
+    "milestones",
     "Welcome.md",
     "Untitled.base"
   ]
