@@ -7,11 +7,13 @@ Robot-agnostic sim-to-real infrastructure on **MuJoCo C (CPU)** and **MuJoCo War
 
 ## How to run
 
-**1. Install** (Python ≥ 3.10; from the repo root):
+**1. Install** with conda (Python 3.12 + uv, from `environment.yml`) and uv (project deps), from the repo root:
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"            # pins mujoco / mujoco-warp 3.17.0, warp-lang 1.18.0
+conda env create -f environment.yml
+conda activate sim2real
+uv pip install -e ".[dev]"         # pins mujoco / mujoco-warp 3.17.0, warp-lang 1.18.0
 ```
+Run every command below inside the activated `sim2real` env.
 
 **2. Test** — 22 tests, ~45 s on a Mac. MJWarp tests use CUDA if present, else Warp-CPU:
 ```bash

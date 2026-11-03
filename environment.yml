@@ -1,0 +1,9 @@
+# Conda provides Python + uv; uv installs the project (deps pinned in pyproject.toml).
+#   conda env create -f environment.yml && conda activate sim2real
+#   uv pip install -e ".[dev]"
+name: sim2real
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - uv

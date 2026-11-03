@@ -59,7 +59,9 @@ python examples/bimanual_relay.py --headless       # two-arm relay, expect succe
 python examples/gpu_rollout.py --nworld 16 --device cpu   # batched env path on a Mac
 ```
 
-Run from the repo root with the project venv active (`pip install -e ".[dev]"`). On macOS the passive viewer
+Run from the repo root inside the conda env (`conda env create -f environment.yml && conda activate sim2real &&
+uv pip install -e ".[dev]"`). Add dependencies to `pyproject.toml`, not to `environment.yml` (conda only provides
+Python and uv). On macOS the passive viewer
 needs `mjpython` instead of `python`.
 
 ## Style
