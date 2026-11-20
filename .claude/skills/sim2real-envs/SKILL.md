@@ -22,7 +22,7 @@ mjw.kinematics → _reward_done_kernel → _masked_reset → _observe (_arm_obs_
 - **Obs** (`ObsLayout`): per arm `q | dq | tcp_pos | finger | cube−tcp` (2n+7), then shared
   `cube_pos | cube_quat | goal | goal−cube` (13). Single 6-DoF arm = 32 dims. Use layout offsets, never literals.
 - **Reward**: reach (nearest TCP of any arm) + lifted + lifted·place + 5 on success (`success_tol=0.03`).
-- **Reset**: `reset_key` (nworld,) int, 0 = home, -1 = keep; `mjw.reset_data_keyframe` with that mask, then
+- **Reset**: `reset_key` (nworld,) int, 0 = home, -1 = keep; `backend.reset_data(mask)` (wraps `mjw.reset_data_keyframe`, keeping the overflow bits) with that mask, then
   `_randomize_kernel` (cube/goal xy, seeded by `seed` + epoch) and `_reset_target_kernel` (OSC target = home TCP).
 - Outputs are Warp arrays: `obs`, `reward`, `done`, `success`; `wp.to_torch(env.obs)` is zero-copy.
 

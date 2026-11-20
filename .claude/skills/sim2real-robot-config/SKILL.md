@@ -59,7 +59,8 @@ Gotchas:
   Child options are synced to the parent first to avoid attach conflict warnings.
 - `build_scene(robots, SceneConfig)`: adds table, cube (`cube_free` freejoint), mocap goal, solver options,
   and the `home` keyframe. Scene owns everything that isn't a robot.
-- `SceneConfig`: `timestep=0.002`, `integrator=implicitfast` (never RK4), `nconmax=48`, `njmax=192` per world.
+- `SceneConfig`: `timestep=0.002`, `integrator=implicitfast` (never RK4), `nconmax=48`, `njmax=192`,
+  `nccdmax=16` (CCD/convex pairs only) per world. Verify a new budget with `MjWarpBackend.overflow()` after an expert episode.
 
 ## Multi-arm (`RobotMount`)
 

@@ -322,7 +322,7 @@ class PickPlaceEnv:
   # --- internals -------------------------------------------------------------
   def _masked_reset(self):
     b, c = self.b, self.cfg
-    mjw.reset_data_keyframe(b.m, b.d, self._reset_key)
+    b.reset_data(self._reset_key)  # not mjw.reset_data_keyframe: the backend keeps the overflow bits across resets
     self._epoch += 1
     wp.launch(_randomize_kernel, dim=self.nworld,
               inputs=[c.seed, self._epoch, self._reset_key, self._cube_qadr, self._cube_dofadr, self._cube0,

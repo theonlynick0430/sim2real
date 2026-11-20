@@ -23,6 +23,8 @@ def _run_expert(scene, device, nworld, episode_steps):
       env.step(action)
       ok |= env.success.numpy().astype(bool)
   assert np.isfinite(env.obs.numpy()).all()
+  ov = b.overflow()
+  assert not (ov["contacts"] or ov["ccd"] or ov["nefc"]), ov  # a dropped contact would silently break grasps
   return env, ok
 
 

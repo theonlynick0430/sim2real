@@ -146,10 +146,11 @@ sim2real/
 ## MuJoCo / MJWarp API notes (validated against 3.17.0; enforced by `tests/test_api_contract.py`)
 
 - **The `qM` → `M` (CSR, `nC`) rename** happened in both MuJoCo C and MJWarp. `mj_fullM` is now `(m, d, dst)`.
-- **`make_data(nconmax, njmax)`:**
+- **`make_data(nconmax, njmax, nccdmax)`:**
   - `nconmax` is per world, drawn from a shared pool `naconmax = nconmax·nworld`.
   - `njmax` is a hard per-world limit.
-  - MJWarp prints overflow warnings, and overflowed contacts are dropped.
+  - `nccdmax` is the per-world share of the CCD contact pool (`naccdmax = nccdmax·nworld`), used only by geom pairs without a closed-form collider (box-box here). It defaults to `nconmax`, and the convex narrowphase allocates about 3 KB of scratch per slot on every call.
+  - MJWarp prints overflow warnings, and overflowed contacts are dropped. It also sets `OverflowType` bits in `d.overflow` per world, but `reset_data_keyframe` zeroes them for the worlds it resets, so the backend accumulates them (`MjWarpBackend.reset_data` + `overflow()`).
 - **Exposed per-step pieces:** `step1`/`step2`, `kinematics`, `reset_data_keyframe(m, d, key_array)` for a per-world masked reset, and `get_data_into` for viewing one world.
 - **MJWarp runs on Warp-CPU on macOS.** It is slow (about 3k physics steps/s at 16 worlds) but correct, and is used here for parity tests and debugging.
 - **Unsupported in MJWarp:** the PGS solver, plugins, and autodiff. RK4 does not work with `step1`/`step2`.
@@ -162,11 +163,13 @@ sim2real/
 - **Contacts dominate the budget.**
   - Bimanual relay peaks at 26 contacts and 125 constraint rows (CPU), within the same 48/192 budget: the arms work sequentially and touch one cube.
   - The YAM fingers are built from about 13 small collision primitives each, so grasping the cube peaks at **36 contacts and 153 constraint rows** (measured on CPU).
-  - `SceneConfig` sets `nconmax=48`, `njmax=192`.
+  - `SceneConfig` sets `nconmax=48`, `njmax=192`, `nccdmax=16`.
   - Data memory is about **46 KB per world**, so 1M worlds needs about 46 GB, which fits an 80 GB A100/H100.
+  - **CCD scratch is the transient peak.** With `nccdmax` left at its default of `nconmax`, the narrowphase scratch made the high-water mark about 4x the steady state (190 KB/world), so a 24 GB RTX 4090 ran out of memory above 65536 worlds. The measured CCD demand is 2 to 4 slots per world during a grasp (the expert sets the CCD overflow bit at 2, not at 4); `nccdmax=16` keeps 4x margin and lets the 4090 run 131072 single-arm worlds at about 8M physics steps/s.
   - With 16/64 buffers it is about 24 KB per world. That requires trimming the finger colliders first (the next optimization).
 - **Graph capture:** `control_substeps` is captured once per (controller, decimation) and replayed. The env's per-step kernels (action, reward, reset, obs, plus 2× `kinematics`) run outside the graph and could be folded in.
 - **Host syncs:** `Backend.body_pos`, `set_body_free_pose`, and `overflow()` read device memory. They are for scripts only and should not be called in the RL loop.
+- **Check `overflow()` after any change to contacts or buffers.** A dropped contact does not fail the task: with the CCD pool at zero the expert still places the cube (the sphere and capsule finger contacts carry the grasp) while the box-box contacts silently vanish. `overflow()["ccd"]`, `["contacts"]` and `["nefc"]` are the bits that mean something was dropped; `tests/test_env.py` asserts all three are clear after an expert episode. `ITERATIONS` only means the solver hit `solver_iterations`, which the bimanual relay does routinely.
 - **Precision:** physics is float32 on GPU and float64 on CPU. Λ uses a damped inverse (`lambda_damping`), and torques are clamped to actuator limits.
 - **Friction:** YAM joints have `frictionloss=0.1`, which creates a steady-state deadband, so the OSC gains default high (`kp_pos=400`). With friction removed, OSC error is below 0.3 mm.
 

@@ -34,6 +34,14 @@ class SceneConfig:
   # Overflow silently drops contacts/constraints, so keep headroom.
   nconmax: int = 48
   njmax: int = 192
+  # CCD (GJK/EPA + multiccd) contact slots per world, from a pool shared by all worlds
+  # (naccdmax = nccdmax * nworld). Only pairs without a closed-form collider use one:
+  # box-box here (cube vs finger/table boxes); spheres and capsules never do.
+  # MJWarp allocates ~3 KB of narrowphase scratch per slot on every collision call, so
+  # the default (= nconmax) made the transient peak ~4x the steady-state memory.
+  # Overflow drops the contact and sets OverflowType.CCD in d.overflow: see
+  # MjWarpBackend.overflow()["ccd"].
+  nccdmax: int = 16
 
 
 @dataclasses.dataclass

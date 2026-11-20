@@ -20,6 +20,14 @@ from sim2real.sim.scene import Scene
 from sim2real.sim.state import ALL_NEEDS, NEED_J, NEED_M, RobotState
 
 
+@wp.kernel
+def _or_overflow_kernel(src: wp.array(dtype=int), acc: wp.array(dtype=int)):
+  """acc |= src, per world. MJWarp's reset_data_keyframe zeroes d.overflow for the worlds it resets, so the
+  backend folds the bits into `acc` before every reset; `overflow()` reports acc | d.overflow."""
+  w = wp.tid()
+  acc[w] = acc[w] | src[w]
+
+
 @dataclasses.dataclass
 class _ArmIndex:
   """Per-arm device-side index maps (built once from the arm's RobotView)."""
@@ -42,6 +50,7 @@ class MjWarpBackend(Backend):
     device: str | None = None,
     nconmax: int | None = None,
     njmax: int | None = None,
+    nccdmax: int | None = None,
     use_graph: bool = True,
   ):
     self.scene = scene
@@ -55,7 +64,8 @@ class MjWarpBackend(Backend):
     with wp.ScopedDevice(self.device):
       self.m = mjw.put_model(self.mjm)
       self.d = mjw.make_data(self.mjm, nworld=nworld, nconmax=nconmax or scene.cfg.nconmax,
-                             njmax=njmax or scene.cfg.njmax)
+                             njmax=njmax or scene.cfg.njmax,
+                             nccdmax=scene.cfg.nccdmax if nccdmax is None else nccdmax)
       self.states = tuple(RobotState.allocate(nworld, v.ndof, self.device) for v in self.views)
       self._arms = tuple(
         _ArmIndex(
@@ -72,14 +82,25 @@ class MjWarpBackend(Backend):
       self._jacp = wp.zeros((nworld, 3, self.mjm.nv), dtype=float)
       self._jacr = wp.zeros((nworld, 3, self.mjm.nv), dtype=float)
       self._jac_point = wp.zeros(nworld, dtype=wp.vec3)
+      self._overflow_acc = wp.zeros(nworld, dtype=int)  # see _or_overflow_kernel
       self._home = self.mjm.key(scene.home_key).id
     self.reset()
 
   # --- physics -----------------------------------------------------------------
-  def reset(self, world_mask: wp.array | None = None) -> None:
-    """Reset to home keyframe; `world_mask` (nworld,) int keyframe ids per world (-1 = keep)."""
+  def reset_data(self, world_mask: wp.array | None = None) -> None:
+    """Masked keyframe reset of `d` only (no forward): `world_mask` (nworld,) int keyframe ids, -1 = keep.
+
+    Always reset through here, not `mjw.reset_data_keyframe` directly, so the overflow bits MJWarp zeroes on
+    reset are folded into the accumulator first (see `overflow()`).
+    """
     with wp.ScopedDevice(self.device):
+      wp.launch(_or_overflow_kernel, dim=self.nworld, inputs=[self.d.overflow, self._overflow_acc])
       mjw.reset_data_keyframe(self.m, self.d, self._home if world_mask is None else world_mask)
+
+  def reset(self, world_mask: wp.array | None = None) -> None:
+    """Reset to home keyframe (`world_mask` as in `reset_data`) and run forward."""
+    self.reset_data(world_mask)
+    with wp.ScopedDevice(self.device):
       mjw.forward(self.m, self.d)
 
   def step1(self) -> None:
@@ -140,13 +161,30 @@ class MjWarpBackend(Backend):
     wp.capture_launch(self._graphs[key][0])
 
   # --- diagnostics -----------------------------------------------------------------
-  def overflow(self) -> dict:
-    """Host sync: contact / constraint buffer usage. Overflowed contacts are silently dropped."""
+  def overflow(self, clear: bool = False) -> dict:
+    """Host sync: contact / constraint buffer usage plus MJWarp's overflow bits.
+
+    `nacon` / `nefc_max` are the current step's usage. `flags` are the OverflowType names set in any world
+    since construction (or the last `clear=True` call). MJWarp ORs bits into `d.overflow` every step but
+    zeroes a world's bits when that world is reset, so the backend accumulates them across resets.
+    `contacts` / `ccd` / `nefc` are the bits that mean a contact or constraint was silently dropped;
+    `ITERATIONS` / `LS_ITERATIONS` only mean the solver hit its iteration cap.
+    """
+    bits = int(np.bitwise_or.reduce(self.d.overflow.numpy() | self._overflow_acc.numpy()))
+    if clear:
+      self.d.overflow.zero_()
+      self._overflow_acc.zero_()
+    ov = mjw.OverflowType
     return {
       "nacon": int(self.d.nacon.numpy()[0]),
       "naconmax": int(self.d.naconmax),
+      "naccdmax": int(self.d.naccdmax),
       "nefc_max": int(self.d.nefc.numpy().max()),
       "njmax": int(self.d.njmax),
+      "contacts": bool(bits & (ov.BROADPHASE | ov.NARROWPHASE)),
+      "ccd": bool(bits & ov.CCD),
+      "nefc": bool(bits & (ov.NEFC | ov.NJMAX_NNZ)),
+      "flags": [f.name for f in ov if f.value and f != ov.ALL and bits & f.value],
     }
 
   # --- host accessors -----------------------------------------------------------------

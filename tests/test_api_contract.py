@@ -34,8 +34,12 @@ def test_mjwarp_api():
              "get_data_into"):
     assert hasattr(mjw, fn), fn
   data_fields = {f.name for f in dataclasses.fields(mjw.Data)}
-  for f in ("qpos", "qvel", "ctrl", "M", "qfrc_bias", "site_xpos", "site_xmat", "xpos", "mocap_pos", "nacon", "nefc"):
+  for f in ("qpos", "qvel", "ctrl", "M", "qfrc_bias", "site_xpos", "site_xmat", "xpos", "mocap_pos", "nacon", "nefc",
+            "naccdmax", "overflow"):
     assert f in data_fields, f
   assert "qM" not in data_fields
   assert list(inspect.signature(mjw.jac).parameters) == ["m", "d", "jacp", "jacr", "point", "body"]
-  assert "nconmax" in inspect.signature(mjw.make_data).parameters
+  for p in ("nconmax", "njmax", "nccdmax"):
+    assert p in inspect.signature(mjw.make_data).parameters, p
+  for flag in ("CCD", "NEFC", "NJMAX_NNZ", "BROADPHASE", "NARROWPHASE", "ITERATIONS", "LS_ITERATIONS"):
+    assert hasattr(mjw.OverflowType, flag), flag
