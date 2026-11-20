@@ -20,6 +20,7 @@ from sim2real.envs.scripted import TOP_DOWN_QUAT
 from sim2real.robots import ActuatorMode, get_robot
 from sim2real.sim.backend import make_backend
 from sim2real.sim.scene import build_scene
+from examples._scenes import close_viewer
 
 
 def main():
@@ -70,6 +71,8 @@ def main():
       viewer.sync()
       time.sleep(max(0.0, decim * dt - (time.time() - tic)))
   print(f"[{args.controller}] mean tracking error over last half: {np.mean(err_log[len(err_log) // 2:]):.4f}")
+  if viewer is not None:
+    close_viewer(viewer)
 
 
 if __name__ == "__main__":

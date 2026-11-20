@@ -10,3 +10,19 @@ def make_scene(bimanual: bool):
   if bimanual:
     return build_scene(yam_bimanual(), SceneConfig(cube_pos=RELAY_CUBE_POS, goal_pos=RELAY_GOAL_POS))
   return build_scene(get_robot("yam"))
+
+
+def close_viewer(viewer, timeout: float = 5.0) -> None:
+  """Close a `mujoco.viewer.launch_passive` handle and wait for its render thread to exit.
+
+  `Handle.close()` only requests exit; the viewer keeps running on a daemon thread. Returning from main
+  while it is still tearing down GL races the interpreter's atexit hooks (glfw.terminate, Warp's CUDA
+  context release) and segfaults intermittently. Joining the thread first makes exit clean.
+  """
+  import threading
+
+  viewer.close()
+  main = threading.main_thread()
+  for t in threading.enumerate():
+    if t is not main and t.daemon and "_launch_internal" in repr(getattr(t, "_target", "")):
+      t.join(timeout)

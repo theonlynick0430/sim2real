@@ -19,6 +19,7 @@ from sim2real.envs.scripted import TOP_DOWN_QUAT, ScriptedPickPlace
 from sim2real.robots import ActuatorMode, get_robot
 from sim2real.sim.backend import make_backend
 from sim2real.sim.scene import build_scene
+from examples._scenes import close_viewer
 
 
 def main():
@@ -80,7 +81,7 @@ def main():
   print(f"[{args.backend}] nworld={backend.nworld} success={success.mean():.3f} mean_err={err.mean():.4f} m "
         f"| {steps * backend.nworld / elapsed:,.0f} env-steps/s ({elapsed:.1f}s wall)")
   if viewer is not None:
-    viewer.close()
+    close_viewer(viewer)
 
 
 if __name__ == "__main__":
