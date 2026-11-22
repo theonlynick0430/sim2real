@@ -1,7 +1,7 @@
-"""Backend-neutral robot state consumed by controllers.
+"""Robot state consumed by controllers.
 
 All arrays are Warp arrays with a leading `nworld` dimension, living on the
-backend's device (cuda for MJWarp, cpu for MuJoCo C / real robot). Conventions
+backend's device (cuda, or cpu when MJWarp runs on Warp-CPU). Conventions
 follow MuJoCo: J rows 0-2 are translational, rows 3-5 rotational, all in the
 world frame; `bias` = C(q, dq) dq + g(q) (MuJoCo `qfrc_bias`).
 """

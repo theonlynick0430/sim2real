@@ -1,8 +1,8 @@
-"""Scripted OSC pick-and-place. Identical code on both backends.
+"""Scripted OSC pick-and-place on MJWarp (CUDA if available, else Warp-CPU). The viewer shows world 0.
 
-  python examples/scripted_pick.py                       # CPU (MuJoCo C) + viewer (macOS: use `mjpython`)
+  mjpython examples/scripted_pick.py                     # viewer (macOS needs `mjpython`)
   python examples/scripted_pick.py --headless
-  python examples/scripted_pick.py --backend warp --nworld 1024 --headless   # MJWarp (GPU, or Warp-CPU)
+  python examples/scripted_pick.py --nworld 1024 --headless --device cuda:0
 """
 
 import argparse
@@ -17,40 +17,31 @@ import numpy as np
 from sim2real.control import OSC
 from sim2real.envs.scripted import TOP_DOWN_QUAT, ScriptedPickPlace
 from sim2real.robots import ActuatorMode, get_robot
-from sim2real.sim.backend import make_backend
+from sim2real.sim.mjwarp_backend import MjWarpBackend
 from sim2real.sim.scene import build_scene
 from examples._scenes import close_viewer
 
 
 def main():
   ap = argparse.ArgumentParser()
-  ap.add_argument("--backend", default="cpu", choices=["cpu", "warp"])
   ap.add_argument("--nworld", type=int, default=1)
-  ap.add_argument("--device", default=None, help="warp device, e.g. cuda:0 or cpu")
+  ap.add_argument("--device", default=None, help="warp device, e.g. cuda:0 or cpu (default: cuda if available)")
   ap.add_argument("--headless", action="store_true")
   ap.add_argument("--decimation", type=int, default=10, help="physics steps per policy step")
   args = ap.parse_args()
 
   robot = get_robot("yam", actuator_mode=ActuatorMode.TORQUE)
   scene = build_scene(robot)
-  kw = {"device": args.device} if args.backend == "warp" else {}
-  backend = make_backend(args.backend, scene, nworld=args.nworld, **kw)
+  backend = MjWarpBackend(scene, nworld=args.nworld, device=args.device)
 
   osc = OSC(backend.view, backend.nworld, device=backend.device)
   osc.check_compatible(robot.actuator_mode)
   script = ScriptedPickPlace(backend.nworld)
 
-  # Per-world randomized cube start, fixed goal (host-side; fine for a script).
-  rng = np.random.default_rng(0)
+  # Same cube start in every world (per-world randomization lives in PickPlaceEnv).
   cube0 = np.tile(np.array(scene.cfg.cube_pos), (backend.nworld, 1))
-  if backend.nworld > 1:
-    cube0[:, :2] += rng.uniform(-0.05, 0.05, size=(backend.nworld, 2))
   goal = np.array(scene.cfg.goal_pos)
-  if args.backend == "cpu":
-    backend.set_body_free_pose("cube_free", cube0)
-  else:
-    backend.set_body_free_pose("cube_free", cube0[0])  # broadcast; per-world randomization lives in PickPlaceEnv
-    cube0[:] = cube0[0]
+  backend.set_body_free_pose("cube_free", cube0[0])
   backend.set_mocap_pos(scene.goal_body, goal)
 
   viewer = None
@@ -78,7 +69,7 @@ def main():
   err = np.linalg.norm(cube - goal, axis=-1)
   success = err < 0.03
   steps = int(round(script.duration / scene.mjm.opt.timestep))
-  print(f"[{args.backend}] nworld={backend.nworld} success={success.mean():.3f} mean_err={err.mean():.4f} m "
+  print(f"[{backend.device}] nworld={backend.nworld} success={success.mean():.3f} mean_err={err.mean():.4f} m "
         f"| {steps * backend.nworld / elapsed:,.0f} env-steps/s ({elapsed:.1f}s wall)")
   if viewer is not None:
     close_viewer(viewer)

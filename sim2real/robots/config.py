@@ -1,7 +1,7 @@
 """Robot configuration + registry.
 
-A robot is *data*, not a class hierarchy: everything a backend, controller or
-real-robot driver needs to know is in `RobotConfig`. Adding a new manipulator
+A robot is *data*, not a class hierarchy: everything the backend or a controller
+needs to know is in `RobotConfig`. Adding a new manipulator
 (Franka, UR7e, ...) means writing one config and calling `register_robot`.
 """
 

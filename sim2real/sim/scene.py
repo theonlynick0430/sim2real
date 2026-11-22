@@ -99,7 +99,7 @@ def _apply_actuator_mode(spec: mujoco.MjSpec, robot: RobotConfig) -> None:
 def robot_spec(robot: RobotConfig) -> mujoco.MjSpec:
   """The robot's own MJCF/URDF with every config-driven edit applied (un-prefixed names).
 
-  Single place for robot-level spec edits, shared by the sim scene and the real-robot model.
+  Single place for robot-level spec edits.
   """
   spec = mujoco.MjSpec.from_file(str(robot.model_path))
   for key in list(spec.keys):  # scenes build their own full-state keyframe

@@ -1,5 +1,5 @@
 """Pins the MuJoCo / MJWarp API surface sim2real depends on. If this fails after a version bump,
-fix the adapters (sim/*_backend.py, dynamics/kernels.py) before anything else."""
+fix the adapters (sim/mjwarp_backend.py, sim/robot_view.py, dynamics/kernels.py) before anything else."""
 
 import dataclasses
 import inspect
@@ -24,9 +24,7 @@ def test_mujoco_c_api():
   full = np.zeros((mjm.nv, mjm.nv))
   mujoco.mj_fullM(mjm, mjd, full)  # signature (m, d, dst)
   jacp, jacr = np.zeros((3, mjm.nv)), np.zeros((3, mjm.nv))
-  mujoco.mj_jacSite(mjm, mjd, jacp, jacr, 0)
-  for fn in ("mj_step1", "mj_step2", "mj_resetDataKeyframe"):
-    assert hasattr(mujoco, fn)
+  mujoco.mj_jacSite(mjm, mjd, jacp, jacr, 0)  # reference oracle in test_dynamics_parity
 
 
 def test_mjwarp_api():

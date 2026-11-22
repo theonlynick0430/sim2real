@@ -7,7 +7,7 @@ description: How to add or modify a robot (Franka, UR, YAM, ...) in sim2real via
 
 ## RobotConfig (`sim2real/robots/config.py`)
 
-A frozen dataclass; everything a backend, controller, or real driver needs. Fields:
+A frozen dataclass; everything the backend or a controller needs. Fields:
 
 | field | meaning |
 |---|---|
@@ -40,8 +40,9 @@ A frozen dataclass; everything a backend, controller, or real driver needs. Fiel
    ```
 3. Import it in `sim2real/robots/__init__.py` so it registers on `import sim2real.robots`.
 4. Controllers are generated per DoF (`linalg(n)`), so a 7-DoF arm needs no controller changes.
-5. Test: build the scene, run `tests/test_dynamics_parity.py`-style CPU vs MJWarp checks, and an OSC tracking
-   test. Measure peak contacts (`MujocoBackend.mjd.ncon`, `nefc`) while grasping and size `SceneConfig.nconmax/njmax`.
+5. Test: build the scene, run `tests/test_dynamics_parity.py`-style MJWarp vs MuJoCo C reference checks, and an
+   OSC tracking test. Measure peak contacts (`MjWarpBackend.overflow()` → `nacon`, `nefc_max`) while grasping and
+   size `SceneConfig.nconmax/njmax`.
 
 Gotchas:
 - Menagerie TCP sites are often the flange, not the pad center — add an `extra_sites` pinch site (see `yam.py`).
@@ -51,7 +52,7 @@ Gotchas:
 ## Scene building (`sim2real/sim/scene.py`)
 
 - `robot_spec(robot)`: loads the asset and applies **all** robot-level edits (actuator mode, extra sites,
-  excludes). It's shared with the real-robot dynamics model, so edits here apply to both.
+  excludes).
 - `_apply_actuator_mode`: TORQUE → `set_to_motor`, ctrl/force range = ±torque_limit, **gravcomp = 0**.
   POSITION → `set_to_position(kp, kv=kd)`.
 - `compose_robots(mounts)`: one un-prefixed mount uses the spec directly (names unchanged); several mounts are
@@ -66,5 +67,4 @@ Gotchas:
 
 `RobotMount(robot, prefix="left/", pos=..., quat=...)`; `mount.resolved` is the config with prefixed names
 (what the compiled model sees). `yam_bimanual(separation)` returns `(left, right)` mounts, left at +y.
-Mount poses should come from the calibrated real rig — the real driver places each arm's dynamics model at
-the same pose so sim and real share one world frame.
+Mount poses should come from the calibrated real rig so sim and real share one world frame.

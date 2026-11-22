@@ -1,6 +1,7 @@
 # sim2real
 
-Robot-agnostic sim-to-real infrastructure on **MuJoCo C (CPU)** and **MuJoCo Warp (GPU)**.
+Robot-agnostic sim-to-real infrastructure on **MuJoCo Warp**. There is one simulation path: it runs on CUDA for
+training and on Warp-CPU for debugging and viewing on a Mac.
 
 - The default robot is the I2RT YAM; its model is vendored from MuJoCo Menagerie under the MIT license.
 - Tasks: single-arm pick-and-place, and a bimanual YAM relay (left arm hands the cube to the right arm via a handoff spot).
@@ -15,32 +16,27 @@ uv pip install -e ".[dev]"         # pins mujoco / mujoco-warp 3.17.0, warp-lang
 ```
 Run every command below inside the activated `sim2real` env.
 
-**2. Test** — 22 tests, ~45 s on a Mac. MJWarp tests use CUDA if present, else Warp-CPU:
+**2. Test** — 19 tests, ~80 s on a Mac. Tests use CUDA if present, else Warp-CPU:
 ```bash
 python -m pytest
 ```
 
-**3. Run on CPU (any machine; MuJoCo C + viewer)** — on macOS the viewer needs `mjpython` instead of `python`:
+**3. View on a Mac (MJWarp on Warp-CPU + passive viewer of world 0)** — the viewer needs `mjpython` instead of
+`python`. Warp-CPU manages ~350 physics steps/s for one world, so playback is a little slower than real time:
 ```bash
-mjpython examples/cpu_viewer.py --controller osc    # hold/track with osc | impedance | pd
-mjpython examples/scripted_pick.py                  # single-arm OSC pick-and-place
-mjpython examples/bimanual_relay.py                 # two YAMs hand off the cube
-python examples/scripted_pick.py --headless         # no viewer (remote / CI)
+mjpython examples/controller_viewer.py --controller osc   # hold/track with osc | impedance | pd
+mjpython examples/scripted_pick.py                        # single-arm OSC pick-and-place
+mjpython examples/bimanual_relay.py                       # two YAMs hand off the cube
+python examples/scripted_pick.py --headless               # no viewer (remote / CI)
 ```
 
-**4. Run on GPU (NVIDIA; MJWarp, many worlds)** — add `--device cpu` to any of these to debug on a Mac:
+**4. Run on GPU (NVIDIA, many worlds)** — the same scripts; the device defaults to CUDA when present. Add
+`--device cpu` to debug on a Mac:
 ```bash
-python examples/scripted_pick.py --backend warp --nworld 1024 --headless
-python examples/bimanual_relay.py --backend warp --nworld 1024 --headless
+python examples/scripted_pick.py --nworld 1024 --headless
+python examples/bimanual_relay.py --nworld 1024 --headless
 python examples/gpu_rollout.py --nworld 4096 [--bimanual]          # batched RL env + scripted expert
 python examples/gpu_bench.py --nworld 1024 65536 262144 1048576 [--bimanual]   # throughput / memory sweep
-```
-
-**5. Real robot** — implement `RobotHardware.read/command` for your SDK (see `sim2real/real/driver.py`;
-`I2RTYamHardware` is a stub), then:
-```python
-from sim2real.real.driver import RealArm, RealControlLoop
-RealControlLoop([RealArm(mount, hardware, controller)], rate_hz=500).run(seconds=10)
 ```
 
 > **macOS note:** Python 3.12 ignores `.pth` files that carry the `hidden` flag. On some setups the editable install ends up hidden, and then `import sim2real` fails. The examples add the repo to `sys.path` themselves, and pytest sets `pythonpath`.
@@ -55,9 +51,8 @@ repo. They're checked in, so everyone who clones the repo gets them, and they co
 | `sim2real-architecture` | module map, invariants, how to verify changes — start here |
 | `sim2real-robot-config` | adding robots (`RobotConfig`), scene building, actuator modes, multi-arm mounts |
 | `sim2real-controllers` | writing controllers as Warp kernels, equations, testing |
-| `sim2real-backends` | CPU/MJWarp backends, `RobotState` filling, validated MJWarp API, CUDA graphs, perf |
+| `sim2real-backends` | the MJWarp backend, `RobotState` filling, validated MJWarp API, CUDA graphs, perf |
 | `sim2real-envs` | batched RL env structure, obs/action/reward/reset, scripted experts |
-| `sim2real-real-robot` | hardware contract, dynamics model, control loop, wiring an SDK |
 
 Keep them in sync when you change the corresponding code.
 
@@ -70,17 +65,14 @@ sim2real/
   sim/       scene.py    MjSpec scene: mounted robot(s) + table + cube + goal; actuator-mode rewrite; contact budget
              robot_view.py  RobotConfig -> model indices (qpos/dof/actuator ids, TCP site, CSR M index)
              state.py    RobotState: q, dq, tcp_pos, tcp_rot, J (6xn), M (nxn), bias  [warp arrays, (nworld, ...)]
-             backend.py  Backend interface (per-arm views/states) + make_backend("cpu" | "warp")
-             mujoco_backend.py   MuJoCo C, 1 world (float64 physics)
-             mjwarp_backend.py   MJWarp, N worlds, CUDA-graph-captured control substeps
+             mjwarp_backend.py   MjWarpBackend: N worlds on CUDA or Warp-CPU, per-arm views/states,
+                                 CUDA-graph-captured control substeps
   dynamics/  kernels.py  MJWarp -> RobotState extraction (CSR->dense M, jac gather, bias, TCP)
   control/   linalg.py   per-DoF fixed-size Cholesky / SPD inverse (warp funcs, generated per n)
              joint.py    JointPD (position or torque), JointImpedance (optionally inertia-shaped)
              osc.py      Operational-space control: one fused kernel per world
   envs/      pick_place.py  batched RL env (MJWarp), 1..N arms: obs / reward / masked reset as kernels
-             scripted.py    backend-agnostic scripted pick-and-place + BimanualRelay
-  real/      driver.py   RobotHardware (MIT-mode contract), RobotDynamicsModel, RealArm, RealControlLoop,
-                         SimulatedRig / SimulatedHardware
+             scripted.py    host-side scripted pick-and-place + BimanualRelay
 ```
 
 ## Key design decisions
@@ -94,24 +86,24 @@ sim2real/
   - gripper settings and contact excludes
   - actuator mode
 - Adding Franka or UR7e means writing one config and calling `register_robot`.
-- `RobotView` resolves names to indices once. It owns no physics, so the CPU backend, GPU backend, and real-robot model all share it.
+- `RobotView` resolves names to indices once and owns no physics.
 
 **2. Dynamics are computed at the backend/state seam.**
 - Controllers are pure `(RobotState, targets, gains) -> command`.
-- Each backend fills `RobotState` from its own native API:
+- The backend fills `RobotState` from MJWarp:
 
-| quantity | MuJoCo C (CPU / real) | MJWarp (GPU) |
-|---|---|---|
-| M | `mj_fullM` | `d.M` is **CSR lower-triangular `(nworld, nC)`**; we expand it with a precomputed index table (`RobotView.m_csr_index`) |
-| J (TCP) | `mj_jacSite` | `mjw.jac(m, d, jacp, jacr, point, body)`, a host-level launch over all worlds that returns all `nv` columns; we gather the arm's columns |
-| bias = C·q̇ + g | `qfrc_bias` | `d.qfrc_bias` |
-| Λ, J⁺, null space | — (custom) | — (custom, inside the controller kernel) |
+| quantity | MJWarp |
+|---|---|
+| M | `d.M` is **CSR lower-triangular `(nworld, nC)`**; we expand it with a precomputed index table (`RobotView.m_csr_index`) |
+| J (TCP) | `mjw.jac(m, d, jacp, jacr, point, body)`, a host-level launch over all worlds that returns all `nv` columns; we gather the arm's columns |
+| bias = C·q̇ + g | `d.qfrc_bias` |
+| Λ, J⁺, null space | custom, inside the controller kernel |
 
-- The real robot uses the same MJCF, robot only, through MuJoCo C (`RobotDynamicsModel`). So "sim dynamics" and "robot dynamics" come from one model.
+- `tests/test_dynamics_parity.py` checks these against MuJoCo C (`mj_fullM`, `mj_jacSite`) as an independent reference. MuJoCo C is not used at runtime.
 
 **3. Controllers are written once, as Warp kernels.**
 - On GPU, a controller is one fused kernel per world, placed inside the CUDA graph between `step1` and `step2`. There are no host syncs.
-- On a Mac or the real robot, the same kernels run on Warp's CPU device, at about 50 µs per physics step, including MuJoCo.
+- On a Mac, the same kernels and the same MJWarp physics run on Warp's CPU device (no graph capture), at about 3 ms per physics step for one world.
 - Custom kernels are needed because MJWarp has no task-space quantities. Per-op torch/linalg calls would also cost far more than one register-resident 6×6 / n×n solve per thread.
 - Matrix types are generated per DoF count (`linalg(n)`), so 6- and 7-DoF arms share code.
 
@@ -126,17 +118,13 @@ sim2real/
   - Required by OSC and impedance control.
 - **POSITION mode:** MuJoCo's implicit position actuators, used by `JointPD` with the configured kp/kd.
 - Each controller declares `output`, and `check_compatible()` catches mismatches.
-- On hardware both modes map onto MIT-mode commands, `τ = kp(q*−q) + kd(q̇*−q̇) + τ_ff`.
 
 **6. Multiple arms are mounts, controlled independently.**
 - A `RobotMount` is a robot config plus a name prefix and a base pose. A bimanual rig is a tuple of mounts (`yam_bimanual(separation)`).
 - `compose_robots` attaches each robot's spec with `MjSpec.attach(prefix=...)`. A single un-prefixed robot takes a direct path instead, so single-arm names are unchanged.
-- Backends hold one `RobotView` and one `RobotState` per arm. `robot_state`, `set_arm_ctrl` and `set_gripper` take `arm=`. `control_substeps` takes one controller per arm and runs them all between the same `step1` and `step2`; on CUDA they share one graph.
+- The backend holds one `RobotView` and one `RobotState` per arm. `robot_state`, `set_arm_ctrl` and `set_gripper` take `arm=`. `control_substeps` takes one controller per arm and runs them all between the same `step1` and `step2`; on CUDA they share one graph.
 - **Why separate per-arm controllers are exact:** fixed-base arms share no joints, so the mass matrix is block-diagonal (asserted in `tests/test_bimanual.py`). Two 6-DoF OSCs produce the same torques as one 12-DoF OSC, at a fraction of the cost. Arms with a shared torso or base would need a whole-body controller instead.
 - **Coordination lives above the controllers:** `BimanualRelay` for scripts, the policy in the env.
-- **Real rigs:** each arm's `RobotDynamicsModel` is placed at its mount pose, so the TCP pose and J are in the same world frame as the sim, and the same targets work in both.
-  - `RealControlLoop` reads every arm, then computes, then commands.
-  - `SimulatedRig` advances physics once per tick.
 
 **7. Control rates.**
 - Physics and the low-level controller run at 500 Hz (`dt = 2 ms`).
@@ -145,14 +133,14 @@ sim2real/
 
 ## MuJoCo / MJWarp API notes (validated against 3.17.0; enforced by `tests/test_api_contract.py`)
 
-- **The `qM` → `M` (CSR, `nC`) rename** happened in both MuJoCo C and MJWarp. `mj_fullM` is now `(m, d, dst)`.
+- **The `qM` → `M` (CSR, `nC`) rename** happened in both MuJoCo C and MJWarp. `mj_fullM` (used by the parity test) is now `(m, d, dst)`.
 - **`make_data(nconmax, njmax, nccdmax)`:**
   - `nconmax` is per world, drawn from a shared pool `naconmax = nconmax·nworld`.
   - `njmax` is a hard per-world limit.
   - `nccdmax` is the per-world share of the CCD contact pool (`naccdmax = nccdmax·nworld`), used only by geom pairs without a closed-form collider (box-box here). It defaults to `nconmax`, and the convex narrowphase allocates about 3 KB of scratch per slot on every call.
   - MJWarp prints overflow warnings, and overflowed contacts are dropped. It also sets `OverflowType` bits in `d.overflow` per world, but `reset_data_keyframe` zeroes them for the worlds it resets, so the backend accumulates them (`MjWarpBackend.reset_data` + `overflow()`).
 - **Exposed per-step pieces:** `step1`/`step2`, `kinematics`, `reset_data_keyframe(m, d, key_array)` for a per-world masked reset, and `get_data_into` for viewing one world.
-- **MJWarp runs on Warp-CPU on macOS.** It is slow (about 3k physics steps/s at 16 worlds) but correct, and is used here for parity tests and debugging.
+- **MJWarp runs on Warp-CPU on macOS.** It is slow (about 350 physics steps/s for one world, 3k at 16 worlds) but correct, and is how this repo is tested, debugged and viewed on a Mac.
 - **Unsupported in MJWarp:** the PGS solver, plugins, and autodiff. RK4 does not work with `step1`/`step2`.
 - **`MjSpec.attach(child, prefix, frame=...)`** prefixes every name, including contact excludes and equality constraints.
   - It warns on an empty prefix, which is why a single robot is not attached.
@@ -161,32 +149,30 @@ sim2real/
 ## Performance notes and bottlenecks
 
 - **Contacts dominate the budget.**
-  - Bimanual relay peaks at 26 contacts and 125 constraint rows (CPU), within the same 48/192 budget: the arms work sequentially and touch one cube.
-  - The YAM fingers are built from about 13 small collision primitives each, so grasping the cube peaks at **36 contacts and 153 constraint rows** (measured on CPU).
+  - Bimanual relay peaks at 26 contacts and 125 constraint rows (measured on MuJoCo C), within the same 48/192 budget: the arms work sequentially and touch one cube.
+  - The YAM fingers are built from about 13 small collision primitives each, so grasping the cube peaks at **36 contacts and 153 constraint rows** (measured on MuJoCo C).
   - `SceneConfig` sets `nconmax=48`, `njmax=192`, `nccdmax=16`.
   - Data memory is about **46 KB per world**, so 1M worlds needs about 46 GB, which fits an 80 GB A100/H100.
   - **CCD scratch is the transient peak.** With `nccdmax` left at its default of `nconmax`, the narrowphase scratch made the high-water mark about 4x the steady state (190 KB/world), so a 24 GB RTX 4090 ran out of memory above 65536 worlds. The measured CCD demand is 2 to 4 slots per world during a grasp (the expert sets the CCD overflow bit at 2, not at 4); `nccdmax=16` keeps 4x margin and lets the 4090 run 131072 single-arm worlds at about 8M physics steps/s.
   - With 16/64 buffers it is about 24 KB per world. That requires trimming the finger colliders first (the next optimization).
 - **Graph capture:** `control_substeps` is captured once per (controller, decimation) and replayed. The env's per-step kernels (action, reward, reset, obs, plus 2× `kinematics`) run outside the graph and could be folded in.
-- **Host syncs:** `Backend.body_pos`, `set_body_free_pose`, and `overflow()` read device memory. They are for scripts only and should not be called in the RL loop.
+- **Host syncs:** `MjWarpBackend.body_pos`, `set_body_free_pose`, and `overflow()` read device memory. They are for scripts only and should not be called in the RL loop.
 - **Check `overflow()` after any change to contacts or buffers.** A dropped contact does not fail the task: with the CCD pool at zero the expert still places the cube (the sphere and capsule finger contacts carry the grasp) while the box-box contacts silently vanish. `overflow()["ccd"]`, `["contacts"]` and `["nefc"]` are the bits that mean something was dropped; `tests/test_env.py` asserts all three are clear after an expert episode. `ITERATIONS` only means the solver hit `solver_iterations`, which the bimanual relay does routinely.
-- **Precision:** physics is float32 on GPU and float64 on CPU. Λ uses a damped inverse (`lambda_damping`), and torques are clamped to actuator limits.
+- **Precision:** physics is float32 (on CUDA and Warp-CPU alike). Λ uses a damped inverse (`lambda_damping`), and torques are clamped to actuator limits.
 - **Friction:** YAM joints have `frictionloss=0.1`, which creates a steady-state deadband, so the OSC gains default high (`kp_pos=400`). With friction removed, OSC error is below 0.3 mm.
 
 ## Status
 
-| | CPU (MuJoCo C, Mac) | MJWarp on Warp-CPU (Mac) | MJWarp on CUDA |
-|---|---|---|---|
-| state parity (M, J, bias, TCP) | reference | ✅ matches CPU | not yet run |
-| OSC / impedance / PD tracking | ✅ | ✅ | not yet run |
-| scripted pick-and-place | ✅ 6 mm placement | ✅ 4/4 worlds | not yet run |
-| batched env + expert | — | ✅ 16/16 success | not yet run; **graph-capture path untested** |
-| bimanual: parity, independent OSC, scripted relay | ✅ relay places within 9 mm | ✅ parity; relay 2/2 worlds | not yet run |
-| bimanual batched env + relay expert | — | ✅ 4/4 success | not yet run |
-| real robot | `RealControlLoop` verified on `SimulatedRig` (1 and 2 arms); dynamics model at mount == sim; `I2RTYamHardware` is a stub | | |
+| | MJWarp on Warp-CPU (Mac) | MJWarp on CUDA |
+|---|---|---|
+| state parity (M, J, bias, TCP) vs MuJoCo C reference | ✅ | not yet run |
+| OSC / impedance / PD tracking | ✅ (same errors as the former MuJoCo C path) | not yet run |
+| scripted pick-and-place | ✅ 6 mm placement | not yet run |
+| batched env + expert | ✅ 16/16 success | not yet run; **graph-capture path untested** |
+| bimanual: independent OSC, scripted relay | ✅ relay places within 10 mm | not yet run |
+| bimanual batched env + relay expert | ✅ 4/4 success | not yet run |
 
 **Next steps:**
 - Run `pytest` and `gpu_bench.py` on the GPU box.
 - Trim finger colliders to shrink the contact budget.
 - Domain randomization through MJWarp's per-world model fields (`body_mass`, `geom_friction`, `actuator_gainprm`, …).
-- Wire the i2rt SDK into `RobotHardware`.

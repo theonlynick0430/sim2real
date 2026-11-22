@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sim2real"
 version = "0.1.0"
-description = "Robot-agnostic sim-to-real infrastructure on MuJoCo (CPU) and MuJoCo Warp (GPU)"
+description = "Robot-agnostic sim-to-real infrastructure on MuJoCo Warp (GPU)"
 requires-python = ">=3.10"
 # mujoco and mujoco-warp move fast (e.g. qM -> CSR M rename); pin together and
 # guard with tests/test_api_contract.py when bumping.

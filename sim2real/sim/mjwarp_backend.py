@@ -1,7 +1,21 @@
-"""MJWarp backend: nworld parallel worlds on a Warp device (CUDA; Warp-CPU works for debugging).
+"""MJWarp backend: the one simulation path. nworld parallel worlds on a Warp device.
 
-Hot path (`control_substeps`) is pure kernel launches over preallocated
-buffers, so on CUDA it is captured once into a CUDA graph and replayed.
+The same code runs on CUDA (training) and on Warp-CPU (macOS debugging / viewing); only CUDA graph
+capture is device-specific. Surface:
+
+  reset()                       -> all worlds to the scene's home keyframe
+  step1() / step2()             -> split physics step; controllers run in between on *current* M, J, bias
+  robot_state(needs, arm=0)     -> RobotState of one arm (warp arrays, backend device)
+  set_arm_ctrl(cmd, arm=0)      -> write (nworld, n) command into that arm's actuators
+  set_gripper(value, arm=0)     -> gripper ctrl, scalar or (nworld,) array
+  control_substeps(ctrls, n)    -> n x [step1, per-arm controller + set_arm_ctrl, step2]
+
+Multi-arm scenes (e.g. bimanual) have one RobotView / RobotState per arm (`views`, `states`); `view` /
+`state` are arm 0. Arms on fixed bases have a block-diagonal mass matrix, so per-arm controllers are exact.
+Host-side (numpy) accessors at the bottom are sync points for scripts, tests and viewers, not the RL loop.
+
+Hot path (`control_substeps`) is pure kernel launches over preallocated buffers, so on CUDA it is
+captured once into a CUDA graph and replayed.
 """
 
 from __future__ import annotations
@@ -14,7 +28,6 @@ import numpy as np
 import warp as wp
 
 from sim2real.dynamics import kernels as K
-from sim2real.sim.backend import Backend, as_controller_list
 from sim2real.sim.robot_view import RobotView
 from sim2real.sim.scene import Scene
 from sim2real.sim.state import ALL_NEEDS, NEED_J, NEED_M, RobotState
@@ -40,9 +53,14 @@ class _ArmIndex:
   grip: wp.array  # (nworld,) host-set gripper values
 
 
-class MjWarpBackend(Backend):
-  name = "warp"
+def as_controller_list(controllers, narm: int) -> list:
+  ctrls = list(controllers) if isinstance(controllers, (list, tuple)) else [controllers]
+  if len(ctrls) > narm:
+    raise ValueError(f"{len(ctrls)} controllers for {narm} arm(s)")
+  return ctrls
 
+
+class MjWarpBackend:
   def __init__(
     self,
     scene: Scene,
@@ -85,6 +103,18 @@ class MjWarpBackend(Backend):
       self._overflow_acc = wp.zeros(nworld, dtype=int)  # see _or_overflow_kernel
       self._home = self.mjm.key(scene.home_key).id
     self.reset()
+
+  @property
+  def view(self) -> RobotView:
+    return self.views[0]
+
+  @property
+  def state(self) -> RobotState:
+    return self.states[0]
+
+  @property
+  def narm(self) -> int:
+    return len(self.views)
 
   # --- physics -----------------------------------------------------------------
   def reset_data(self, world_mask: wp.array | None = None) -> None:
@@ -147,18 +177,31 @@ class MjWarpBackend(Backend):
     wp.launch(K.set_ctrl_column_kernel, dim=self.nworld, inputs=[act, arr], outputs=[self.d.ctrl], device=self.device)
 
   def control_substeps(self, controllers, n: int) -> None:
-    if not self.use_graph:
-      return super().control_substeps(controllers, n)
+    """Run `n` physics steps with the low-level controller(s) in the loop.
+
+    `controllers`: one controller (arm 0) or a sequence with one entry per arm (None = leave that arm's
+    ctrl unchanged). All arms see the same physics step. On CUDA the n steps are one replayed graph.
+    """
     ctrls = tuple(as_controller_list(controllers, self.narm))
+    if not self.use_graph:
+      return self._substeps(ctrls, n)
     key = (tuple(map(id, ctrls)), n)
     if key not in self._graphs:
-      super().control_substeps(ctrls, 1)  # warm-up: compile kernels outside capture
+      self._substeps(ctrls, 1)  # warm-up: compile kernels outside capture
       with wp.ScopedCapture(device=self.device) as cap:
-        super().control_substeps(ctrls, n)
+        self._substeps(ctrls, n)
       # Keep the controllers alive with their graph: the key uses id(), which Python may reuse
       # after garbage collection, and the graph bakes in the controllers' buffer addresses.
       self._graphs[key] = (cap.graph, ctrls)
     wp.capture_launch(self._graphs[key][0])
+
+  def _substeps(self, ctrls, n: int) -> None:
+    for _ in range(n):
+      self.step1()
+      for arm, c in enumerate(ctrls):
+        if c is not None:
+          self.set_arm_ctrl(c.compute(self.robot_state(c.requires, arm)), arm)
+      self.step2()
 
   # --- diagnostics -----------------------------------------------------------------
   def overflow(self, clear: bool = False) -> dict:
@@ -212,6 +255,7 @@ class MjWarpBackend(Backend):
     mjw.forward(self.m, self.d)
 
   def to_mjdata(self, world: int = 0, out=None):
+    """MjData of one world (for the passive viewer / debugging); refreshes `out` in place if given."""
     mjd = mujoco.MjData(self.mjm) if out is None else out
     mjw.get_data_into(mjd, self.mjm, self.d, world_id=world)
     return mjd

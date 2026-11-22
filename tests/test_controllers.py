@@ -1,23 +1,27 @@
-"""Controller kernels vs NumPy references, plus closed-loop behaviour on the CPU backend."""
+"""Controller kernels vs NumPy references, plus closed-loop behaviour on MJWarp."""
 
 import mujoco
+import mujoco_warp as mjw
 import numpy as np
 import pytest
 
 from sim2real.control import OSC, JointImpedance, JointPD
 from sim2real.envs.scripted import TOP_DOWN_QUAT, ScriptedPickPlace
 from sim2real.robots import ActuatorMode
-from sim2real.sim.mujoco_backend import MujocoBackend
+from sim2real.sim.mjwarp_backend import MjWarpBackend
 
 
-def _random_state(scene, seed):
-  b = MujocoBackend(scene)
+def _random_state(scene, seed, device):
+  b = MjWarpBackend(scene, nworld=1, device=device)
   rng = np.random.default_rng(seed)
   v = b.view
   lo, hi = scene.mjm.jnt_range[:6].T
-  b.mjd.qpos[v.qpos_adr] = rng.uniform(lo + 0.2, hi - 0.2)
-  b.mjd.qvel[v.dof_adr] = rng.normal(0, 0.5, 6)
-  mujoco.mj_forward(b.mjm, b.mjd)
+  qpos, qvel = b.d.qpos.numpy(), b.d.qvel.numpy()
+  qpos[0, v.qpos_adr] = rng.uniform(lo + 0.2, hi - 0.2)
+  qvel[0, v.dof_adr] = rng.normal(0, 0.5, 6)
+  b.d.qpos.assign(qpos)
+  b.d.qvel.assign(qvel)
+  mjw.forward(b.m, b.d)
   return b, b.robot_state()
 
 
@@ -48,9 +52,9 @@ def osc_reference(s, tp, tR, kp, kd, q_null, kpn, kdn, lam, lim):
 
 
 @pytest.mark.parametrize("seed", range(5))
-def test_osc_matches_reference(yam_torque_scene, seed):
-  b, st = _random_state(yam_torque_scene, seed)
-  osc = OSC(b.view, 1, kp_pos=150, kp_rot=60, device="cpu")
+def test_osc_matches_reference(yam_torque_scene, warp_device, seed):
+  b, st = _random_state(yam_torque_scene, seed, warp_device)
+  osc = OSC(b.view, 1, kp_pos=150, kp_rot=60, device=b.device)
   rng = np.random.default_rng(100 + seed)
   tp = st.tcp_pos.numpy()[0] + rng.normal(0, 0.03, 3)
   osc.set_target(tp, quat_wxyz=TOP_DOWN_QUAT)
@@ -61,31 +65,31 @@ def test_osc_matches_reference(yam_torque_scene, seed):
   np.testing.assert_allclose(tau, ref, rtol=2e-3, atol=2e-3)
 
 
-def test_joint_controllers_match_reference(yam_torque_scene):
-  b, st = _random_state(yam_torque_scene, 7)
+def test_joint_controllers_match_reference(yam_torque_scene, warp_device):
+  b, st = _random_state(yam_torque_scene, 7, warp_device)
   s = _np(st)
   qd = s["q"] + 0.1
   lim = b.view.torque_limits
-  imp = JointImpedance(b.view, 1, stiffness=50.0, device="cpu")
+  imp = JointImpedance(b.view, 1, stiffness=50.0, device=b.device)
   imp.set_target(qd)
   ref = np.clip(imp.kp.numpy() * (qd - s["q"]) - imp.kd.numpy() * s["dq"] + s["bias"], -lim, lim)
   np.testing.assert_allclose(imp.compute(st).numpy()[0], ref, rtol=1e-4, atol=1e-4)
 
-  ct = JointImpedance(b.view, 1, stiffness=100.0, inertia_shaped=True, device="cpu")
+  ct = JointImpedance(b.view, 1, stiffness=100.0, inertia_shaped=True, device=b.device)
   ct.set_target(qd)
   ref = np.clip(s["M"] @ (100 * (qd - s["q"]) - 20 * s["dq"]) + s["bias"], -lim, lim)
   np.testing.assert_allclose(ct.compute(st).numpy()[0], ref, rtol=1e-4, atol=1e-4)
 
-  pd = JointPD(b.view, 1, mode=ActuatorMode.POSITION, device="cpu")
+  pd = JointPD(b.view, 1, mode=ActuatorMode.POSITION, device=b.device)
   pd.set_target(qd)
   np.testing.assert_allclose(pd.compute(st).numpy()[0], qd, atol=1e-6)
   with pytest.raises(ValueError):
     pd.check_compatible(ActuatorMode.TORQUE)
 
 
-def test_osc_converges(yam_torque_scene):
-  b = MujocoBackend(yam_torque_scene)
-  osc = OSC(b.view, 1, device="cpu")
+def test_osc_converges(yam_torque_scene, warp_device):
+  b = MjWarpBackend(yam_torque_scene, nworld=1, device=warp_device)
+  osc = OSC(b.view, 1, device=b.device)
   target = np.array([0.30, 0.10, 0.12])
   osc.set_target(target, quat_wxyz=TOP_DOWN_QUAT)
   b.control_substeps(osc, 1500)
@@ -95,11 +99,11 @@ def test_osc_converges(yam_torque_scene):
   assert z[2] < -0.99  # tool axis pointing down
 
 
-def test_scripted_pick_place_cpu(yam_torque_scene):
+def test_scripted_pick_place(yam_torque_scene, warp_device):
   scene = yam_torque_scene
   robot = scene.robot
-  b = MujocoBackend(scene)
-  osc = OSC(b.view, 1, device="cpu")
+  b = MjWarpBackend(scene, nworld=1, device=warp_device)
+  osc = OSC(b.view, 1, device=b.device)
   script = ScriptedPickPlace(1)
   cube0 = np.array([scene.cfg.cube_pos])
   goal = np.array(scene.cfg.goal_pos)
@@ -112,16 +116,3 @@ def test_scripted_pick_place_cpu(yam_torque_scene):
     t += 0.02
   assert np.linalg.norm(b.body_pos("cube")[0] - goal) < 0.02
 
-
-def test_real_loop_with_simulated_hardware(yam_torque_scene):
-  """Real-robot code path (separate dynamics model + MIT-mode conversion) drives the sim."""
-  from sim2real.real.driver import RealArm, RealControlLoop, SimulatedRig
-
-  b = MujocoBackend(yam_torque_scene)
-  rig = SimulatedRig(b)
-  osc = OSC(b.view, 1, device="cpu")
-  target = np.array([0.32, -0.05, 0.15])
-  osc.set_target(target, quat_wxyz=TOP_DOWN_QUAT)
-  loop = RealControlLoop([RealArm(yam_torque_scene.mounts[0], rig.hardware[0], osc)], rate_hz=500)
-  loop.run(3.0, realtime=False, after_tick=rig.advance)
-  assert np.linalg.norm(b.mjd.site(yam_torque_scene.robot.tcp_site).xpos - target) < 0.01

@@ -1,5 +1,6 @@
-"""MJWarp-derived RobotState (CSR->dense M, mjw.jac gather, bias) == MuJoCo C (mj_fullM, mj_jacSite).
+"""MJWarp-derived RobotState (CSR->dense M, mjw.jac gather, bias) == MuJoCo C reference (mj_fullM, mj_jacSite).
 
+MuJoCo C is used here only as an independent oracle for the gather kernels; it is not a simulation path.
 Run for the single-arm and the bimanual scene, every arm.
 """
 
@@ -9,36 +10,50 @@ import numpy as np
 import pytest
 
 from sim2real.sim.mjwarp_backend import MjWarpBackend
-from sim2real.sim.mujoco_backend import MujocoBackend
+
+
+def _reference(mjm, mjd, view):
+  """Arm quantities straight from MuJoCo C, float64, after mj_forward."""
+  full = np.zeros((mjm.nv, mjm.nv))
+  mujoco.mj_fullM(mjm, mjd, full)
+  jacp, jacr = np.zeros((3, mjm.nv)), np.zeros((3, mjm.nv))
+  mujoco.mj_jacSite(mjm, mjd, jacp, jacr, view.tcp_site_id)
+  dof = view.dof_adr
+  return {
+    "M": full[np.ix_(dof, dof)],
+    "J": np.concatenate([jacp[:, dof], jacr[:, dof]]),
+    "bias": mjd.qfrc_bias[dof],
+    "tcp_pos": mjd.site_xpos[view.tcp_site_id],
+    "tcp_rot": mjd.site_xmat[view.tcp_site_id].reshape(3, 3),
+  }
 
 
 @pytest.mark.parametrize("scene_name", ["yam_torque_scene", "yam_bimanual_scene"])
 def test_state_parity(scene_name, warp_device, request):
   scene = request.getfixturevalue(scene_name)
+  mjm = scene.mjm
   nworld = 4
   rng = np.random.default_rng(0)
-  gpu = MjWarpBackend(scene, nworld=nworld, device=warp_device)
-  cpu = MujocoBackend(scene)
-  qpos = np.tile(cpu.mjd.qpos, (nworld, 1))
-  qvel = np.zeros((nworld, scene.mjm.nv))
-  for v in cpu.views:
-    lo, hi = scene.mjm.jnt_range[[scene.mjm.joint(j).id for j in v.cfg.arm_joints]].T
+  b = MjWarpBackend(scene, nworld=nworld, device=warp_device)
+  qpos = b.d.qpos.numpy().astype(np.float64)
+  qvel = np.zeros((nworld, mjm.nv))
+  for v in b.views:
+    lo, hi = mjm.jnt_range[[mjm.joint(j).id for j in v.cfg.arm_joints]].T
     qpos[:, v.qpos_adr] = rng.uniform(lo + 0.1, hi - 0.1, (nworld, v.ndof))
     qvel[:, v.dof_adr] = rng.normal(0, 1.0, (nworld, v.ndof))
-  gpu.d.qpos.assign(qpos.astype(np.float32))
-  gpu.d.qvel.assign(qvel.astype(np.float32))
-  mjw.forward(gpu.m, gpu.d)
+  b.d.qpos.assign(qpos.astype(np.float32))
+  b.d.qvel.assign(qvel.astype(np.float32))
+  mjw.forward(b.m, b.d)
 
-  for arm in range(cpu.narm):
-    sg = gpu.robot_state(arm=arm)
-    M, J, bias, pos = sg.M.numpy(), sg.J.numpy(), sg.bias.numpy(), sg.tcp_pos.numpy()
+  mjd = mujoco.MjData(mjm)
+  tol = {"M": (1e-3, 1e-5), "J": (1e-3, 1e-5), "bias": (1e-3, 1e-4), "tcp_pos": (0, 1e-5), "tcp_rot": (0, 1e-5)}
+  for arm, v in enumerate(b.views):
+    s = b.robot_state(arm=arm)
+    got = {k: getattr(s, k).numpy() for k in tol}
     for w in range(nworld):
-      cpu.mjd.qpos[:] = qpos[w]
-      cpu.mjd.qvel[:] = qvel[w]
-      mujoco.mj_forward(cpu.mjm, cpu.mjd)
-      sc = cpu.robot_state(arm=arm)
-      np.testing.assert_allclose(M[w], sc.M.numpy()[0], rtol=1e-3, atol=1e-5)
-      np.testing.assert_allclose(J[w], sc.J.numpy()[0], rtol=1e-3, atol=1e-5)
-      np.testing.assert_allclose(bias[w], sc.bias.numpy()[0], rtol=1e-3, atol=1e-4)
-      np.testing.assert_allclose(pos[w], sc.tcp_pos.numpy()[0], atol=1e-5)
-      assert np.all(np.linalg.eigvalsh(M[w]) > 0)
+      mjd.qpos[:], mjd.qvel[:] = qpos[w], qvel[w]
+      mujoco.mj_forward(mjm, mjd)
+      ref = _reference(mjm, mjd, v)
+      for k, (rtol, atol) in tol.items():
+        np.testing.assert_allclose(got[k][w], ref[k], rtol=rtol, atol=atol, err_msg=f"arm {arm} world {w} {k}")
+      assert np.all(np.linalg.eigvalsh(got["M"][w]) > 0)

@@ -5,7 +5,7 @@ description: How the batched MJWarp RL environment (PickPlaceEnv) and scripted p
 
 # Environments (`sim2real/envs/`)
 
-## PickPlaceEnv (`pick_place.py`) — MJWarp only
+## PickPlaceEnv (`pick_place.py`)
 
 Per policy step, all Warp kernels, no host syncs:
 
@@ -39,7 +39,7 @@ mjw.kinematics → _reward_done_kernel → _masked_reset → _observe (_arm_obs_
 3. Host-side reads (`.numpy()`) only in `__init__` (e.g. home TCP) or tests.
 4. Tests: an expert/scripted policy reaching high success on Warp-CPU with few worlds (see `tests/test_env.py`).
 
-## Scripted policies (`scripted.py`) — backend-agnostic
+## Scripted policies (`scripted.py`) — host-side numpy, for scripts and tests
 
 - `ScriptedPickPlace(nworld)`: time-phased waypoints (`PHASES`: above_cube → descend → grasp → lift → to_goal → place → release → retreat),
   `__call__(t, cube_pos0, goal) -> (pos, closed)`. `TOP_DOWN_QUAT` is the tool orientation.

@@ -1,9 +1,9 @@
-"""CPU (MuJoCo C) viewer with scripted motion under a selectable controller.
+"""Scripted motion under a selectable controller, on MJWarp (CUDA if available, else Warp-CPU).
 
-  mjpython examples/cpu_viewer.py --controller osc          # TCP traces a circle (macOS needs `mjpython`)
-  mjpython examples/cpu_viewer.py --controller impedance    # joint-space sinusoid, torque mode
-  mjpython examples/cpu_viewer.py --controller pd           # joint-space sinusoid, MuJoCo position actuators
-  python   examples/cpu_viewer.py --controller osc --headless --seconds 5
+  mjpython examples/controller_viewer.py --controller osc        # TCP traces a circle (macOS needs `mjpython`)
+  mjpython examples/controller_viewer.py --controller impedance  # joint-space sinusoid, torque mode
+  mjpython examples/controller_viewer.py --controller pd         # joint-space sinusoid, MuJoCo position actuators
+  python   examples/controller_viewer.py --controller osc --headless --seconds 5
 """
 
 import argparse
@@ -18,7 +18,7 @@ import numpy as np
 from sim2real.control import OSC, JointImpedance, JointPD
 from sim2real.envs.scripted import TOP_DOWN_QUAT
 from sim2real.robots import ActuatorMode, get_robot
-from sim2real.sim.backend import make_backend
+from sim2real.sim.mjwarp_backend import MjWarpBackend
 from sim2real.sim.scene import build_scene
 from examples._scenes import close_viewer
 
@@ -26,6 +26,7 @@ from examples._scenes import close_viewer
 def main():
   ap = argparse.ArgumentParser()
   ap.add_argument("--controller", default="osc", choices=["osc", "impedance", "pd"])
+  ap.add_argument("--device", default=None, help="warp device, e.g. cuda:0 or cpu (default: cuda if available)")
   ap.add_argument("--headless", action="store_true")
   ap.add_argument("--seconds", type=float, default=30.0)
   args = ap.parse_args()
@@ -33,21 +34,22 @@ def main():
   mode = ActuatorMode.POSITION if args.controller == "pd" else ActuatorMode.TORQUE
   robot = get_robot("yam", actuator_mode=mode)
   scene = build_scene(robot)
-  backend = make_backend("cpu", scene)
-  view = backend.view
+  backend = MjWarpBackend(scene, nworld=1, device=args.device)
+  view, dev = backend.view, backend.device
   if args.controller == "osc":
-    ctrl = OSC(view, 1, device="cpu")
+    ctrl = OSC(view, 1, device=dev)
   elif args.controller == "impedance":
-    ctrl = JointImpedance(view, 1, stiffness=[60, 60, 60, 20, 10, 10], inertia_shaped=False, device="cpu")
+    ctrl = JointImpedance(view, 1, stiffness=[60, 60, 60, 20, 10, 10], inertia_shaped=False, device=dev)
   else:
-    ctrl = JointPD(view, 1, mode=ActuatorMode.POSITION, device="cpu")
+    ctrl = JointPD(view, 1, mode=ActuatorMode.POSITION, device=dev)
   ctrl.check_compatible(mode)
 
   viewer = None
   if not args.headless:
     import mujoco.viewer
 
-    viewer = mujoco.viewer.launch_passive(scene.mjm, backend.mjd)
+    vis = backend.to_mjdata(0)
+    viewer = mujoco.viewer.launch_passive(scene.mjm, vis)
 
   dt = scene.mjm.opt.timestep
   decim = 10
@@ -68,6 +70,7 @@ def main():
     cur = st.tcp_pos.numpy()[0] if args.controller == "osc" else st.q.numpy()[0]
     err_log.append(np.linalg.norm(cur - target))
     if viewer is not None:
+      backend.to_mjdata(0, out=vis)
       viewer.sync()
       time.sleep(max(0.0, decim * dt - (time.time() - tic)))
   print(f"[{args.controller}] mean tracking error over last half: {np.mean(err_log[len(err_log) // 2:]):.4f}")

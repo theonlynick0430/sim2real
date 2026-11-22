@@ -1,13 +1,15 @@
 ---
 name: sim2real-backends
-description: The sim2real Backend interface (MuJoCo C CPU and MJWarp GPU), how RobotState is filled on each, validated MuJoCo/MJWarp 3.17 API facts, CUDA graph capture, and GPU performance rules. Use when touching sim/, dynamics/, bumping mujoco/mujoco-warp, or optimizing throughput.
+description: The sim2real MJWarp backend (one sim path on CUDA or Warp-CPU), how RobotState is filled, validated MuJoCo/MJWarp 3.17 API facts, CUDA graph capture, and GPU performance rules. Use when touching sim/, dynamics/, bumping mujoco/mujoco-warp, or optimizing throughput.
 ---
 
-# Backends (`sim2real/sim/`, `sim2real/dynamics/`)
+# Backend (`sim2real/sim/`, `sim2real/dynamics/`)
 
-## Interface (`backend.py`)
+## Interface (`mjwarp_backend.py`)
 
-`make_backend("cpu" | "warp", scene, nworld=1, device=None)`. Both implement:
+`MjWarpBackend(scene, nworld=1, device=None)` is the only simulation backend; there is no abstract base and no
+MuJoCo C runtime path. `device=None` picks Warp's default (CUDA if present, else CPU). On Warp-CPU everything is
+identical except CUDA graph capture is skipped. Surface:
 
 - physics: `reset()`, `step1()`, `step2()`, `control_substeps(ctrls, n)` (n × [step1, per-arm controller →
   `set_arm_ctrl`, step2])
@@ -19,21 +21,21 @@ description: The sim2real Backend interface (MuJoCo C CPU and MJWarp GPU), how R
 `RobotView.from_model(mjm, cfg)` resolves names → `qpos_adr`, `dof_adr`, `act_ids`, `tcp_site_id`,
 `tcp_body_id`, `gripper_act_id`, and `m_csr_index` (dense n×n → CSR M index, -1 = structural zero).
 
-## How each backend fills RobotState
+## How RobotState is filled (float32, N worlds)
 
-| quantity | `MujocoBackend` (CPU, float64 physics) | `MjWarpBackend` (N worlds, float32) |
-|---|---|---|
-| M | `mj_fullM(m, d, dst)` then sub-block | `d.M` is CSR lower-tri `(nworld, nC)` → `gather_mass_kernel` via `m_csr_index` |
-| J | `mj_jacSite` | `mjw.jac(m, d, jacp, jacr, point, body)` (host-level batched, all nv cols) → `gather_jac_kernel` |
-| bias | `qfrc_bias` | `d.qfrc_bias` |
-| TCP | `site_xpos/xmat` | `d.site_xpos/xmat` |
+| quantity | MJWarp |
+|---|---|
+| M | `d.M` is CSR lower-tri `(nworld, nC)` → `gather_mass_kernel` via `m_csr_index` |
+| J | `mjw.jac(m, d, jacp, jacr, point, body)` (host-level batched, all nv cols) → `gather_jac_kernel` |
+| bias | `d.qfrc_bias` |
+| TCP | `d.site_xpos/xmat` |
 
-`fill_state_from_mjdata` (CPU) is shared with the real-robot dynamics model. CPU writes through zero-copy
-`.numpy()` views of Warp-CPU arrays.
+`tests/test_dynamics_parity.py` checks all of these against MuJoCo C (`mj_fullM`, `mj_jacSite`) as a test-only
+oracle. Viewing: `to_mjdata(0, out=vis)` + `mujoco.viewer.launch_passive(...).sync()` (macOS: `mjpython`).
 
 ## Validated API facts (mujoco / mujoco-warp 3.17.0; guarded by `tests/test_api_contract.py`)
 
-- `qM` → `M` (CSR, `nC`) rename in both; `mj_fullM(m, d, dst)`.
+- `qM` → `M` (CSR, `nC`) rename in both; `mj_fullM(m, d, dst)` (parity-test oracle).
 - `mjw.make_data(mjm, nworld, nconmax, njmax, nccdmax)`: `nconmax` per world from a shared pool
   (`naconmax = nconmax·nworld`); `njmax` hard per-world limit; `nccdmax` per-world share of the CCD pool
   (`naccdmax = nccdmax·nworld`, defaults to `nconmax`), used only by convex (GJK/EPA) pairs — box-box here.
@@ -43,7 +45,7 @@ description: The sim2real Backend interface (MuJoCo C CPU and MJWarp GPU), how R
 - `mjw.step1/step2`, `kinematics`, `forward`, `reset_data_keyframe(m, d, key | per-world int array, -1 = keep)`,
   `get_data_into(mjd, mjm, d, world_id=)`.
 - Unsupported in MJWarp: PGS solver, plugins, autodiff; RK4 incompatible with step1/step2.
-- MJWarp runs on Warp-CPU (slow, ~3k steps/s at 16 worlds) — fine for parity tests on macOS.
+- MJWarp runs on Warp-CPU (slow: ~350 steps/s at 1 world, ~3k at 16) — how tests, debugging and viewing run on macOS.
 - When bumping versions: update pins together, run `test_api_contract.py` and `test_dynamics_parity.py` first.
   Check the installed source (`python -c "import mujoco_warp, inspect; ..."`) rather than assuming.
 

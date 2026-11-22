@@ -1,6 +1,6 @@
 ---
 name: sim2real-controllers
-description: How sim2real controllers (OSC, joint impedance, PD) are written as batched Warp kernels that run unchanged on GPU, Warp-CPU and the real robot, with their equations and conventions. Use when writing a new controller, changing control math or gains, or debugging tracking.
+description: How sim2real controllers (OSC, joint impedance, PD) are written as batched Warp kernels that run unchanged on CUDA and Warp-CPU, with their equations and conventions. Use when writing a new controller, changing control math or gains, or debugging tracking.
 ---
 
 # Controllers as Warp kernels (`sim2real/control/`)
@@ -9,7 +9,7 @@ description: How sim2real controllers (OSC, joint impedance, PD) are written as 
 
 ```python
 class MyCtrl(Controller):
-  requires = frozenset({NEED_M, NEED_J, NEED_BIAS})   # backends skip what isn't listed
+  requires = frozenset({NEED_M, NEED_J, NEED_BIAS})   # the backend skips what isn't listed
   output = ActuatorMode.TORQUE                        # or POSITION; check_compatible() enforces it
   def __init__(self, view, nworld, ..., device=None):
     super().__init__(view, nworld, device)            # allocates self.cmd (nworld, n), self.tau_limit
@@ -20,6 +20,8 @@ class MyCtrl(Controller):
 ```
 
 Rules:
+- Construct on the backend's device: `OSC(backend.view, backend.nworld, device=backend.device)`. Never hardcode
+  `"cpu"` / `"cuda"`; the same script must work on both.
 - `compute` = kernel launches only. No `.numpy()`, no allocation, no Python branching on device data — it is
   captured into a CUDA graph (keyed by controller identity) and replayed.
 - Targets live in preallocated buffers; update them with `.assign()` (host) or a kernel (RL env), never
@@ -57,9 +59,8 @@ code. Use `wp.types.matrix(shape=(6, n))` for J-shaped types.
 1. Implement kernel + class in `sim2real/control/<name>.py`, export in `control/__init__.py`.
 2. Add a NumPy reference and compare on random states (`tests/test_controllers.py::osc_reference` pattern),
    tolerance ~1e-3 relative (float32 vs float64).
-3. Add a closed-loop test on `MujocoBackend` (tracking error) and, if it uses M/J, run it on MJWarp too.
-4. It automatically works on the real robot: `RealArm.send` maps TORQUE → MIT `kp=kd=0, τ_ff=τ`,
-   POSITION → MIT `q_des=cmd` with config `kp/kd`.
+3. Add a closed-loop test on `MjWarpBackend(scene, nworld=1, device=warp_device)` (tracking error); see
+   `tests/test_controllers.py`.
 
 ## Multi-arm
 
