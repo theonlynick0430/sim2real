@@ -16,7 +16,7 @@ uv pip install -e ".[dev]"         # pins mujoco / mujoco-warp 3.17.0, warp-lang
 ```
 Run every command below inside the activated `sim2real` env.
 
-**2. Test** — 19 tests, ~80 s on a Mac. Tests use CUDA if present, else Warp-CPU:
+**2. Test** — 24 tests, ~80 s on a Mac (the cuRobo planning suite skips without a CUDA GPU). Tests use CUDA if present, else Warp-CPU:
 ```bash
 python -m pytest
 ```
@@ -38,6 +38,25 @@ python examples/bimanual_relay.py --nworld 1024 --headless
 python examples/gpu_rollout.py --nworld 4096 [--bimanual]          # batched RL env + scripted expert
 python examples/gpu_bench.py --nworld 1024 65536 262144 1048576 [--bimanual]   # throughput / memory sweep
 ```
+
+**5. GPU IK / motion planning (cuRoboV2, Linux + NVIDIA GPU only)** — standalone, not wired into the envs or
+controllers yet. Collision checking is disabled. The arm is exported from MJCF to a kinematic URDF (cuRobo only
+reads URDF); `tests/test_planning_urdf.py` checks that export on any machine:
+```bash
+uv pip install -e ".[dev,planning]"           # cuRobo pinned in pyproject (cu12; use cu13-torch for CUDA 13)
+python -m pytest tests/test_planning_curobo.py -v
+python examples/plan_demo.py --headless --batch 32   # IK benchmark + sequential and batched planning
+```
+```python
+from sim2real.planning import GpuIK, GpuMotionPlanner
+from sim2real.planning.adapters import planner_config_from_robot
+cfg = planner_config_from_robot(get_robot("yam"), "/tmp/planning")   # poses in the robot base frame, wxyz
+res = GpuIK(cfg.replace(max_batch_size=256)).solve(pos, quat)        # res.q, res.success, res.pos_err, res.rot_err
+mp = GpuMotionPlanner(cfg); mp.warmup()
+traj = mp.plan_pose(q_start, pos, quat)       # or mp.plan_joint(q_start, q_goal); batch=True for many at once
+traj.q, traj.dq, traj.ddq, traj.dt, traj.length, traj.success   # (B, T, dof) at cfg.interpolation_dt
+```
+`sim2real/planning/` imports nothing else from sim2real except `adapters.py`, so it can be moved out as a package.
 
 > **macOS note:** Python 3.12 ignores `.pth` files that carry the `hidden` flag. On some setups the editable install ends up hidden, and then `import sim2real` fails. The examples add the repo to `sys.path` themselves, and pytest sets `pythonpath`.
 
@@ -73,6 +92,12 @@ sim2real/
              osc.py      Operational-space control: one fused kernel per world
   envs/      pick_place.py  batched RL env (MJWarp), 1..N arms: obs / reward / masked reset as kernels
              scripted.py    host-side scripted pick-and-place + BimanualRelay
+  planning/  (self-contained; only adapters.py imports sim2real)
+             mjcf_to_urdf.py  MuJoCo chain (base body -> TCP site) -> kinematic + inertial URDF
+             config.py   PlannerConfig -> cuRobo robot dict without collision spheres
+             ik.py       GpuIK: batched cuRobo IK        motion.py  GpuMotionPlanner: plan_pose / plan_joint
+             fk.py       host FK of the URDF via MuJoCo  frames.py  world <-> base pose transforms
+             adapters.py RobotConfig -> URDF + PlannerConfig
 ```
 
 ## Key design decisions

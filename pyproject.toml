@@ -19,6 +19,13 @@ dependencies = [
 [project.optional-dependencies]
 torch = ["torch"]
 dev = ["pytest"]
+# GPU IK / motion planning (sim2real/planning). Linux + NVIDIA GPU only. cuRoboV2 pinned to a main commit
+# after v0.9.0: it honors self_collision_check=False during validation and adds enable_inverse_dynamics.
+# Move to the next tagged release once it ships. CUDA 13 drivers: swap the extra for `cu13-torch`.
+planning = [
+  "torch>=2.5",
+  "nvidia-curobo[cu12-torch] @ git+https://github.com/NVlabs/curobo@163e335cbfc559b6cec48dbcb9d82e4375ea2f70",
+]
 
 [tool.setuptools.packages.find]
 include = ["sim2real*"]
