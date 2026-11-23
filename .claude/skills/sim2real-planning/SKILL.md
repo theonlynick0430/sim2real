@@ -61,7 +61,13 @@ bmp = GpuMotionPlanner(cfg.replace(max_batch_size=32), batch=True)   # BatchMoti
     exported URDF), not cuRobo, so it matches `MujocoFK` exactly; not included in `solve_time`. Off by
     default (fields are `None`); cost is ~B·T host FK + Jacobian calls.
 - **Batch sizing:**
-  - `GpuIK` handles at most `cfg.max_batch_size` targets per call.
+  - `GpuIK` handles at most `cfg.max_batch_size` targets per call; cuRobo's `solve_pose` pads smaller
+    batches to `max_batch_size` itself, so the batch size may vary freely between calls.
+  - `GpuIK.solve` always passes cuRobo a current state (`current_q`, else `cfg.default_q`). cuRobo builds
+    its goal buffer and CUDA graph on the first call; a current state that first appears on a later call
+    needs a graph reset, which is off by default (`curobo.runtime.cuda_graph_reset`) and raises
+    "CUDA graph reset is not available", leaving the CUDA context unusable. Keep the inputs structurally
+    identical across calls.
   - The batched planner always solves exactly `max_batch_size` problems. Smaller batches are padded with
     the last row and trimmed from the output.
 - **Warmup and CUDA graphs:** call `warmup()` once. The first call captures CUDA graphs, which takes seconds;

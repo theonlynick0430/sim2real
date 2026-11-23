@@ -65,5 +65,8 @@ class MujocoFK:
 
 def rotation_error(quat_a, quat_b) -> np.ndarray:
   """Angle [rad] between orientations (B, 4) wxyz, sign-invariant."""
-  dot = np.abs(np.sum(np.asarray(quat_a) * np.asarray(quat_b), -1))
-  return 2.0 * np.arccos(np.clip(dot, 0.0, 1.0))
+  # atan2 of |a - b| and |a + b| rather than 2 * arccos(|a . b|): arccos near 1 turns float32 rounding
+  # (~1e-8 in the dot product) into ~5e-4 rad of error; this form is accurate down to ~1e-8 rad.
+  a, b = np.asarray(quat_a, dtype=np.float64), np.asarray(quat_b, dtype=np.float64)
+  d, s = np.linalg.norm(a - b, axis=-1), np.linalg.norm(a + b, axis=-1)
+  return 2.0 * np.arctan2(np.minimum(d, s), np.maximum(d, s))

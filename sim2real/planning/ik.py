@@ -52,14 +52,21 @@ class GpuIK:
     """pos (B,3), quat_wxyz (B,4): targets in the base frame (numpy or torch; unbatched inputs allowed).
 
     seed_q (B,dof): optional initial guesses, used alongside cuRobo's random seeds.
-    current_q (B,dof): optional; ranks solutions by closeness to this configuration.
+    current_q (B,dof): optional; ranks solutions by closeness to this configuration (default: cfg.default_q).
     Returns torch tensors on the planner device (`.numpy()` for host arrays).
     """
     c, cfg = self._c, self.cfg
     pos, quat = c.as_tensor(pos, cfg, 2), c.as_tensor(quat_wxyz, cfg, 2)
     batch = pos.shape[0]
-    current = c.joint_state(c.as_tensor(current_q, cfg, 2), cfg.joint_names) if current_q is not None else None
     seed = c.as_tensor(seed_q, cfg, 2).unsqueeze(1) if seed_q is not None else None
+    # Always give cuRobo a current state. Its goal buffer (and the CUDA graph captured from it) is built on the
+    # first call; a current state appearing later changes the buffer structure and needs a graph reset, which
+    # cuRobo disables by default ("CUDA graph reset is not available"), and omitting it later silently reuses
+    # the previous call's. Without `current_q`, fall back to cfg.default_q. (Batch size needs no care here:
+    # cuRobo pads to max_batch_size itself.)
+    if current_q is None:
+      current_q = np.tile(np.asarray(cfg.default_q, dtype=np.float32), (batch, 1))
+    current = c.joint_state(c.as_tensor(current_q, cfg, 2), cfg.joint_names)
     res = self.solver.solve_pose(c.goal_pose(cfg, pos, quat), current_state=current, seed_config=seed)
     q = res.js_solution.position if res.js_solution is not None else res.solution
     return IKResult(

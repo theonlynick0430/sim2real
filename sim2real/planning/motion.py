@@ -137,9 +137,11 @@ class GpuMotionPlanner:
                         torch.zeros(n, dtype=torch.bool, device=q0.device))
     js = res.interpolated_trajectory
 
+    # cuRobo reuses its result buffers across plan calls, so everything kept here must be a copy (clone):
+    # a view would be overwritten by the next call (the non-batch path makes one call per problem).
     def per_problem(x):  # [n, seeds, T, dof] | [n, T, dof] | [T, dof] -> [n, T, dof]
       x = x.reshape(1, *x.shape) if x.ndim == 2 else x
-      return (x[:, 0] if x.ndim == 4 else x)[:n].float()
+      return (x[:, 0] if x.ndim == 4 else x)[:n].float().clone()
 
     q = per_problem(js.position)
     dq = per_problem(js.velocity) if js.velocity is not None else torch.zeros_like(q)
@@ -147,11 +149,11 @@ class GpuMotionPlanner:
     T = q.shape[1]
     if res.interpolated_last_tstep is not None:
       length = self._c.first_per_problem(torch.as_tensor(res.interpolated_last_tstep, device=q.device), n)
-      length = length.long().clamp(1, T)
+      length = length.long().clamp(1, T)  # clamp copies
     else:
       length = torch.full((n,), T, dtype=torch.long, device=q.device)
     dt = float(js.dt.reshape(-1)[0]) if js.dt is not None else self.cfg.interpolation_dt
-    success = self._c.first_per_problem(res.success, n).bool().to(q.device)
+    success = self._c.first_per_problem(res.success, n).bool().to(q.device).clone()
     return Trajectory(q, dq, ddq, dt, length, success)
 
   @staticmethod
