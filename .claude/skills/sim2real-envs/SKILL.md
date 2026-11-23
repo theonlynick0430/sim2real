@@ -43,10 +43,14 @@ backend.kinematics() → _reward_done_kernel → _masked_reset → _observe (_ar
 
 ## Scripted policies (`scripted.py`) — host-side numpy, for scripts and tests
 
+- `top_down_quat(yaw)` / `box_grasp_yaw(quat)` use MuJoCo `mju_*` quaternion functions (no hand-written math).
 - `ScriptedPickPlace(nworld)`: time-phased waypoints (`PHASES`: above_cube → descend → grasp → lift → to_goal → place → release → retreat),
   `__call__(t, cube_pos0, goal) -> (pos, closed)`. `TOP_DOWN_QUAT` is the tool orientation.
 - `BimanualRelay(nworld, handoff, park)`: left arm picks cube → handoff, parks; right arm latches cube pose,
   yaw-aligns its grasp (`box_grasp_yaw`), places at goal. Returns `[(pos, closed, quat)] × 2`.
   Yaw alignment was required: a ~6° cube yaw made the second grasp slip.
 - Layout constants `RELAY_CUBE_POS`, `RELAY_GOAL_POS`, `RELAY_HANDOFF`.
-- GPU experts for the env are kernels in `examples/_expert.py` (`launch_expert(env, action)`), time-phased.
+- GPU experts for the env are kernels in `examples/_expert.py` (`launch_expert(env, action)`), time-phased. One
+  `@wp.func _pick_place(t, tcp, cube, place, hover) -> (target, grip)` holds the pick schedule; the single-arm
+  expert uses it directly, the relay's left arm adds release/park after it, and the right arm runs it from
+  `RIGHT_START`.

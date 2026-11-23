@@ -17,9 +17,9 @@ controllers or existing examples uses it yet.
 | `config.py` | `PlannerConfig` (frozen) + `curobo_robot_dict()` (format 2.0, **no `collision_spheres`**) |
 | `ik.py` | `GpuIK(cfg).solve(pos, quat_wxyz, seed_q=None, current_q=None) -> IKResult` |
 | `motion.py` | `GpuMotionPlanner(cfg, batch=False, **plan_kwargs)`: `warmup()`, `plan_pose`, `plan_joint` -> `Trajectory` |
-| `fk.py` | `MujocoFK(urdf, joints, tool_link)`: host FK of the URDF via MuJoCo, `sample_q`; `rotation_error` |
-| `frames.py` | `world_to_base` / `base_to_world` (numpy, wxyz) |
-| `_curobo.py` | torch/cuRobo glue: tensors, `RobotCfg` without spheres, batch padding, result slicing |
+| `fk.py` | `MujocoFK(urdf, joints, tool_link)`: host FK of the URDF via MuJoCo, `sample_q`; `rotation_error` (`mju_subQuat`) |
+| `frames.py` | `world_to_base` / `base_to_world` (numpy, wxyz, via `mju_mulPose` / `mju_negPose`) |
+| `_curobo.py` | torch/cuRobo glue: tensors, `RobotCfg` without spheres, batch padding, result slicing, `to_numpy` |
 | `adapters.py` | `planner_config_from_robot(RobotConfig, workdir, velocity=2.0, **overrides)`, `export_robot_urdf` |
 
 - **Only `adapters.py` may import other `sim2real.*` modules.** Everything else uses relative imports.
@@ -28,6 +28,8 @@ controllers or existing examples uses it yet.
 - `__init__.py` imports `GpuIK`, `GpuMotionPlanner` and `adapters` **lazily**. Importing `sim2real.planning`
   must keep working without torch/cuRobo (on the Mac). Keep torch/cuRobo imports inside functions or `_curobo.py`.
 - Hard deps are only numpy and mujoco. torch and cuRobo come from the `planning` extra in `pyproject.toml`.
+- Pose math uses MuJoCo's `mju_*` functions. The package can't import `sim2real.utils`, so it keeps its own
+  small helpers (e.g. `mjcf_to_urdf.quat_to_mat`).
 
 ## Usage
 
@@ -82,6 +84,7 @@ bmp = GpuMotionPlanner(cfg.replace(max_batch_size=32), batch=True)   # BatchMoti
 - **What's dropped:** side branches such as the gripper fingers, and all visual/collision geometry.
 - **`extra_sites`:** `export_robot_urdf` builds the model with `sim2real.sim.scene.robot_spec`, so config
   `extra_sites` such as YAM's `pinch_site` are included.
+- **Missing names:** an unknown `base_body` or `tool_site` raises `KeyError` (from MuJoCo's name lookup).
 - **Refuses (raises `ValueError`) on:**
   - more than one joint on a body;
   - ball or free joints;
@@ -120,6 +123,9 @@ bmp = GpuMotionPlanner(cfg.replace(max_batch_size=32), batch=True)   # BatchMoti
     current_state)` handle one problem. `BatchMotionPlanner` has the same methods over `[B, dof]`.
 - **Planner result fields:**
   - `interpolated_trajectory` (JointState) is a fixed buffer, `[B, seeds, T, dof]` or `[B, T, dof]`.
+  - **Result buffers are reused across calls**: the next plan call overwrites them in place. Anything kept must
+    be copied (`_extract` clones `q`, `dq`, `ddq`, `success`); views made the non-batch planner return the last
+    problem's trajectory for every row.
   - `interpolated_last_tstep` is the **count** of valid steps per problem, not the last index.
   - `get_interpolated_plan()` refuses batches, so we slice the buffer ourselves.
 - **Collision is off** when there's no scene, `self_collision_check=False`, and the robot has zero spheres
@@ -161,5 +167,5 @@ python examples/plan_demo.py --headless --batch 32    # IK benchmark + sequentia
 - **Not integrated:** for example, feed `traj.q`/`traj.dq` as `JointPD`/`JointImpedance` targets at
   `traj.dt`, or OSC from FK. Keep `step1 → controller → step2`, and keep planning out of the RL hot loop,
   since it's a host-side call.
-- **Not validated on a GPU** in this repo yet: the first run on the Linux box may need shape fixes in
-  `_curobo.first_per_problem` / `GpuMotionPlanner._extract`.
+- **Validated on a GPU** (RTX 4090, torch 2.11 + cu128): the full cuRobo suite passes. That first run found
+  the result-buffer aliasing and the IK current-state / CUDA-graph issue described above.

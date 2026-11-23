@@ -32,7 +32,7 @@ Rules:
 
 ## Fixed-size linear algebra (`linalg.py`)
 
-`la = linalg(n)` (cached per n) gives `vec`, `mat`, `cholesky`, `cho_solve`, `spd_inverse`, `load_vec`,
+`ops = linalg(n)` (cached per n) gives `vec`, `mat`, `cholesky`, `cho_solve`, `spd_inverse`, `load_vec`,
 `load_mat`. Per-world matrices live in registers; one thread per world. Kernels that depend on n are built in a
 `@functools.cache` factory with `@wp.kernel(module="unique")` (see `_osc_kernel(n)`), so 6- and 7-DoF arms share
 code. Use `wp.types.matrix(shape=(6, n))` for J-shaped types.
@@ -50,7 +50,8 @@ code. Use `wp.types.matrix(shape=(6, n))` for J-shaped types.
   with `inertia_shaped=True` (raises otherwise).
   Default `D = kd_cfg·√(K/kp_cfg)` (keeps configured damping ratio); inertia-shaped default `kd = 2√kp`.
 - **OSC** —
-  `e = [p_des−p ; log(R_des Rᵀ)]`, `v = J q̇`,
+  `e = [p_des−p ; log(R_des Rᵀ)]` (rotation vector via Warp's `wp.quat_to_axis_angle`, shortest rotation),
+  `v = J q̇`,
   `Λ = (J M⁻¹ Jᵀ + εI)⁻¹` (M⁻¹Jᵀ via one Cholesky of M),
   `F = Λ(a_des + Kp e + Kd(v_des − v))`, `Kd = 2ζ√Kp`,
   `τ₀ = kp_null(q_null−q) − kd_null q̇`, `J̄ = M⁻¹JᵀΛ`,

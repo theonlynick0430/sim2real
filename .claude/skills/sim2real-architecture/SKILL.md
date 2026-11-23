@@ -57,7 +57,7 @@ RobotConfig ──► Scene (MjSpec → MjModel) ──► MjWarpBackend (cuda |
 ```bash
 python -m pytest                                   # all tests; CUDA if present, else Warp-CPU
 python examples/scripted_pick.py --headless        # pick-and-place, expect success=1.000, ~6 mm
-python examples/bimanual_relay.py --headless       # two-arm relay, expect success=1.000, ~10 mm
+python examples/bimanual_relay.py --headless       # two-arm relay, expect success=1.000, ~5 or ~10 mm
 python examples/controller_viewer.py --headless --seconds 5   # osc tracking error ~0.008
 python examples/gpu_rollout.py --nworld 16 --device cpu   # batched env path on a Mac
 ```

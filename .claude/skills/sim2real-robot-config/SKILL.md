@@ -17,7 +17,7 @@ A frozen dataclass; everything the backend or a controller needs. Fields:
 | `tcp_site` | end-effector frame used for J and OSC |
 | `home_qpos`, `torque_limits` | length `ndof`; limits clamp every controller output |
 | `kp`, `kd` | default joint gains (POSITION mode actuators, `JointPD` defaults, impedance damping ratio) |
-| `gripper_actuator`, `gripper_open`, `gripper_closed` | single position actuator for the gripper (optional) |
+| `gripper_actuator`, `gripper_open`, `gripper_closed` | single position actuator for the gripper (optional); `gripper_ctrl(closed)` returns the ctrl value |
 | `actuator_mode` | `ActuatorMode.TORQUE` (motor, needed by OSC/impedance) or `POSITION` (implicit PD) |
 | `contact_excludes` | body pairs with contacts disabled (saves GPU contact budget) |
 | `extra_sites` | `(name, body, pos, quat_wxyz)` sites added at build time — define a TCP the asset lacks |
