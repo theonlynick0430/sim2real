@@ -33,7 +33,7 @@ RobotConfig ──► Scene (MjSpec → MjModel) ──► MjWarpBackend (cuda |
 | `sim2real/dynamics/kernels.py` | MJWarp Data → RobotState gather kernels | `sim2real-backends` |
 | `sim2real/control/` | `Controller` base, `JointPD`, `JointImpedance`, `OSC`, `linalg(n)` | `sim2real-controllers` |
 | `sim2real/envs/` | batched `PickPlaceEnv`, scripted policies | `sim2real-envs` |
-| `sim2real/planning/` | GPU IK / motion planning on cuRoboV2 (no collision), MJCF→URDF export. Self-contained: only `adapters.py` may import other sim2real modules (enforced by `tests/test_planning_urdf.py`). Torch/cuRobo imported lazily; Linux + CUDA only | — |
+| `sim2real/planning/` | GPU IK / motion planning on cuRoboV2 (no collision), MJCF→URDF export. Self-contained: only `adapters.py` may import other sim2real modules (enforced by `tests/test_planning_urdf.py`). Torch/cuRobo imported lazily; Linux + CUDA only | `sim2real-planning` |
 | `examples/` | runnable scripts (below); `_scenes.py` / `_expert.py` are shared helpers, not entry points | — |
 
 ## Invariants (do not break)

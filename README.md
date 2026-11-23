@@ -72,6 +72,7 @@ repo. They're checked in, so everyone who clones the repo gets them, and they co
 | `sim2real-controllers` | writing controllers as Warp kernels, equations, testing |
 | `sim2real-backends` | the MJWarp backend, `RobotState` filling, validated MJWarp API, CUDA graphs, perf |
 | `sim2real-envs` | batched RL env structure, obs/action/reward/reset, scripted experts |
+| `sim2real-planning` | GPU IK / motion planning on cuRoboV2: API, MJCF→URDF export, pinned cuRobo facts, GPU testing |
 
 Keep them in sync when you change the corresponding code.
 
