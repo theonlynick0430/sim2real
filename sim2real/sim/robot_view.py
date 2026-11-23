@@ -1,8 +1,7 @@
 """RobotView: resolves a RobotConfig against a compiled MjModel into index maps.
 
-Owns no physics and no backend state — it is the only place that knows how
-robot-level names map onto model-level indices, so every backend (and the
-real-robot dynamics model) can share it.
+Owns no physics and no backend state: it is the only place that knows how
+robot-level names map onto model-level indices.
 """
 
 from __future__ import annotations
@@ -33,38 +32,32 @@ class RobotView:
 
   @staticmethod
   def from_model(mjm: mujoco.MjModel, cfg: RobotConfig) -> "RobotView":
-    qpos_adr, dof_adr = [], []
-    for name in cfg.arm_joints:
-      j = mjm.joint(name)
-      if int(np.asarray(j.type).reshape(-1)[0]) not in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
+    joints = [mjm.joint(name).id for name in cfg.arm_joints]
+    for name, j in zip(cfg.arm_joints, joints):
+      if int(mjm.jnt_type[j]) not in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
         raise ValueError(f"arm joint '{name}' must be hinge or slide")
-      qpos_adr.append(j.qposadr[0])
-      dof_adr.append(j.dofadr[0])
-    act_ids = [mjm.actuator(name).id for name in cfg.arm_actuators]
-    site = mjm.site(cfg.tcp_site)
-    grip = mjm.actuator(cfg.gripper_actuator).id if cfg.gripper_actuator else -1
-
-    n = len(dof_adr)
-    idx = np.full((n, n), -1, dtype=np.int32)
-    for a, da in enumerate(dof_adr):
-      for b, db in enumerate(dof_adr):
-        row, col = max(da, db), min(da, db)
-        start = mjm.M_rowadr[row]
-        cols = mjm.M_colind[start : start + mjm.M_rownnz[row]]
-        hit = np.nonzero(cols == col)[0]
-        if hit.size:
-          idx[a, b] = start + hit[0]
-
+    dof_adr = mjm.jnt_dofadr[joints].astype(np.int32)
+    site = mjm.site(cfg.tcp_site).id
     return RobotView(
       cfg=cfg,
-      ndof=n,
-      qpos_adr=np.asarray(qpos_adr, np.int32),
-      dof_adr=np.asarray(dof_adr, np.int32),
-      act_ids=np.asarray(act_ids, np.int32),
-      tcp_site_id=int(site.id),
-      tcp_body_id=int(mjm.site_bodyid[site.id]),
-      gripper_act_id=int(grip),
-      m_csr_index=idx,
+      ndof=len(joints),
+      qpos_adr=mjm.jnt_qposadr[joints].astype(np.int32),
+      dof_adr=dof_adr,
+      act_ids=np.array([mjm.actuator(name).id for name in cfg.arm_actuators], np.int32),
+      tcp_site_id=int(site),
+      tcp_body_id=int(mjm.site_bodyid[site]),
+      gripper_act_id=mjm.actuator(cfg.gripper_actuator).id if cfg.gripper_actuator else -1,
+      m_csr_index=csr_index(mjm, dof_adr),
       torque_limits=np.asarray(cfg.torque_limits, np.float32),
       home_qpos=np.asarray(cfg.home_qpos, np.float32),
     )
+
+
+def csr_index(mjm: mujoco.MjModel, dofs: np.ndarray) -> np.ndarray:
+  """(n, n) index into the CSR mass matrix `M` (length nC) for each entry of the dense block over `dofs`,
+  -1 for structural zeros. MuJoCo's own `mj_fullM` does the CSR -> dense expansion: feed it M = 1..nC."""
+  probe = mujoco.MjData(mjm)
+  probe.M[:] = np.arange(1, mjm.nC + 1)
+  full = np.zeros((mjm.nv, mjm.nv))
+  mujoco.mj_fullM(mjm, probe, full)
+  return full[np.ix_(dofs, dofs)].astype(np.int32) - 1

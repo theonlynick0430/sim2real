@@ -5,7 +5,6 @@ Run for the single-arm and the bimanual scene, every arm.
 """
 
 import mujoco
-import mujoco_warp as mjw
 import numpy as np
 import pytest
 
@@ -29,21 +28,12 @@ def _reference(mjm, mjd, view):
 
 
 @pytest.mark.parametrize("scene_name", ["yam_torque_scene", "yam_bimanual_scene"])
-def test_state_parity(scene_name, warp_device, request):
+def test_state_parity(scene_name, warp_device, randomize_arms, request):
   scene = request.getfixturevalue(scene_name)
   mjm = scene.mjm
   nworld = 4
-  rng = np.random.default_rng(0)
   b = MjWarpBackend(scene, nworld=nworld, device=warp_device)
-  qpos = b.d.qpos.numpy().astype(np.float64)
-  qvel = np.zeros((nworld, mjm.nv))
-  for v in b.views:
-    lo, hi = mjm.jnt_range[[mjm.joint(j).id for j in v.cfg.arm_joints]].T
-    qpos[:, v.qpos_adr] = rng.uniform(lo + 0.1, hi - 0.1, (nworld, v.ndof))
-    qvel[:, v.dof_adr] = rng.normal(0, 1.0, (nworld, v.ndof))
-  b.d.qpos.assign(qpos.astype(np.float32))
-  b.d.qvel.assign(qvel.astype(np.float32))
-  mjw.forward(b.m, b.d)
+  qpos, qvel = randomize_arms(b, np.random.default_rng(0), margin=0.1, vel_std=1.0)
 
   mjd = mujoco.MjData(mjm)
   tol = {"M": (1e-3, 1e-5), "J": (1e-3, 1e-5), "bias": (1e-3, 1e-4), "tcp_pos": (0, 1e-5), "tcp_rot": (0, 1e-5)}

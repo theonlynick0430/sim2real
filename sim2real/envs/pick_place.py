@@ -15,14 +15,13 @@ avoids target wind-up. Tool orientation is held top-down (extend by also driving
 
 import dataclasses
 
-import mujoco_warp as mjw
 import numpy as np
 import warp as wp
 
-from sim2real.control.osc import OSC, quat_wxyz_to_mat
+from sim2real.control.osc import OSC
 from sim2real.envs.scripted import TOP_DOWN_QUAT
 from sim2real.sim.mjwarp_backend import MjWarpBackend
-
+from sim2real.utils import broadcast, quat_to_mat
 
 
 @dataclasses.dataclass(frozen=True)
@@ -41,11 +40,11 @@ class ObsLayout:
 
   @staticmethod
   def build(ndofs) -> "ObsLayout":
-    offs, k = [], 0
+    offsets, k = [], 0
     for n in ndofs:
-      offs.append(k)
+      offsets.append(k)
       k += 2 * n + 7
-    return ObsLayout(tuple(offs), tuple(ndofs), k, k + 13)
+    return ObsLayout(tuple(offsets), tuple(ndofs), k, k + 13)
 
   def q(self, a): return self.arm_offsets[a]  # noqa: E704
   def dq(self, a): return self.arm_offsets[a] + self.ndofs[a]  # noqa: E704
@@ -99,18 +98,15 @@ def _apply_action_kernel(
   for i in range(3):
     p[i] = wp.clamp(p[i] + scale * wp.clamp(action[w, col + i], -1.0, 1.0), lo[i], hi[i])
   target_pos[w] = p
-  if action[w, col + 3] > 0.0:
-    grip[w] = grip_closed
-  else:
-    grip[w] = grip_open
+  grip[w] = wp.where(action[w, col + 3] > 0.0, grip_closed, grip_open)
 
 
 @wp.kernel
 def _reward_done_kernel(
   site_xpos: wp.array2d(dtype=wp.vec3),
   tcp_sites: wp.array(dtype=int),
-  qpos: wp.array2d(dtype=float),
-  cube_qadr: int,
+  xpos: wp.array2d(dtype=wp.vec3),
+  cube_body: int,
   goal: wp.array(dtype=wp.vec3),
   cube_half: float,
   tol: float,
@@ -122,29 +118,20 @@ def _reward_done_kernel(
   reset_key: wp.array(dtype=int),
 ):
   w = wp.tid()
-  cube = wp.vec3(qpos[w, cube_qadr], qpos[w, cube_qadr + 1], qpos[w, cube_qadr + 2])
-  d_reach = float(1.0e6)  # nearest TCP (any arm)
+  cube = xpos[w, cube_body]
+  reach = float(1.0e6)  # distance from the nearest TCP (any arm) to the cube
   for a in range(tcp_sites.shape[0]):
-    d_reach = wp.min(d_reach, wp.length(site_xpos[w, tcp_sites[a]] - cube))
-  d_goal = wp.length(cube - goal[w])
-  lifted = float(0.0)
-  if cube[2] > cube_half + 0.01:
-    lifted = 1.0
-  ok = d_goal < tol
-  r = (1.0 - wp.tanh(10.0 * d_reach)) + lifted + lifted * (1.0 - wp.tanh(5.0 * d_goal))
-  if ok:
-    r += 5.0
-  reward[w] = r
+    reach = wp.min(reach, wp.length(site_xpos[w, tcp_sites[a]] - cube))
+  to_goal = wp.length(cube - goal[w])
+  lifted = wp.where(cube[2] > cube_half + 0.01, 1.0, 0.0)
+  ok = to_goal < tol
+  r = (1.0 - wp.tanh(10.0 * reach)) + lifted + lifted * (1.0 - wp.tanh(5.0 * to_goal))
+  reward[w] = wp.where(ok, r + 5.0, r)
   step_count[w] = step_count[w] + 1
-  s = int(0)
-  if ok:
-    s = 1
-  success[w] = s
-  dn = int(0)
-  if ok or step_count[w] >= max_steps:
-    dn = 1
-  done[w] = dn
-  reset_key[w] = wp.where(dn == 1, 0, -1)  # keyframe 0 (home) for finished worlds
+  finished = ok or step_count[w] >= max_steps
+  success[w] = wp.where(ok, 1, 0)
+  done[w] = wp.where(finished, 1, 0)
+  reset_key[w] = wp.where(finished, 0, -1)  # keyframe 0 (home) for finished worlds
 
 
 @wp.kernel
@@ -168,16 +155,14 @@ def _randomize_kernel(
   w = wp.tid()
   if reset_key[w] < 0:
     return
-  state = wp.rand_init(seed, w + epoch * 7919)
-  c = cube0 + wp.vec3(wp.randf(state, -cube_range, cube_range), wp.randf(state, -cube_range, cube_range), 0.0)
-  g = goal0 + wp.vec3(wp.randf(state, -goal_range, goal_range), wp.randf(state, -goal_range, goal_range), 0.0)
-  qpos[w, cube_qadr + 0] = c[0]
-  qpos[w, cube_qadr + 1] = c[1]
-  qpos[w, cube_qadr + 2] = c[2]
-  qpos[w, cube_qadr + 3] = 1.0
-  qpos[w, cube_qadr + 4] = 0.0
-  qpos[w, cube_qadr + 5] = 0.0
-  qpos[w, cube_qadr + 6] = 0.0
+  rng = wp.rand_init(seed, w + epoch * 7919)
+  c = cube0 + wp.vec3(wp.randf(rng, -cube_range, cube_range), wp.randf(rng, -cube_range, cube_range), 0.0)
+  g = goal0 + wp.vec3(wp.randf(rng, -goal_range, goal_range), wp.randf(rng, -goal_range, goal_range), 0.0)
+  for i in range(3):
+    qpos[w, cube_qadr + i] = c[i]
+  qpos[w, cube_qadr + 3] = 1.0  # identity quaternion (wxyz)
+  for i in range(4, 7):
+    qpos[w, cube_qadr + i] = 0.0
   for i in range(6):
     qvel[w, cube_dofadr + i] = 0.0
   mocap_pos[w, goal_mocap] = g
@@ -194,47 +179,49 @@ def _reset_target_kernel(reset_key: wp.array(dtype=int), home_tcp: wp.vec3, targ
 
 @wp.kernel
 def _arm_obs_kernel(
-  qpos_adr: wp.array(dtype=int),
-  dof_adr: wp.array(dtype=int),
-  finger_qadr: int,
-  tcp_site: int,
-  cube_qadr: int,
+  q: wp.array2d(dtype=float),
+  dq: wp.array2d(dtype=float),
+  tcp_pos: wp.array(dtype=wp.vec3),
   qpos: wp.array2d(dtype=float),
-  qvel: wp.array2d(dtype=float),
-  site_xpos: wp.array2d(dtype=wp.vec3),
-  off: int,
+  finger_qadr: int,
+  xpos: wp.array2d(dtype=wp.vec3),
+  cube_body: int,
+  offset: int,
   obs: wp.array2d(dtype=float),
 ):
   w = wp.tid()
-  n = qpos_adr.shape[0]
+  n = q.shape[1]
   for i in range(n):
-    obs[w, off + i] = qpos[w, qpos_adr[i]]
-    obs[w, off + n + i] = qvel[w, dof_adr[i]]
-  k = off + 2 * n
-  tcp = site_xpos[w, tcp_site]
+    obs[w, offset + i] = q[w, i]
+    obs[w, offset + n + i] = dq[w, i]
+  k = offset + 2 * n
+  tcp = tcp_pos[w]
+  cube = xpos[w, cube_body]
   for i in range(3):
     obs[w, k + i] = tcp[i]
-    obs[w, k + 4 + i] = qpos[w, cube_qadr + i] - tcp[i]
+    obs[w, k + 4 + i] = cube[i] - tcp[i]
   obs[w, k + 3] = qpos[w, finger_qadr]
 
 
 @wp.kernel
 def _shared_obs_kernel(
-  cube_qadr: int,
-  qpos: wp.array2d(dtype=float),
+  xpos: wp.array2d(dtype=wp.vec3),
+  xquat: wp.array2d(dtype=wp.quat),
+  cube_body: int,
   goal: wp.array(dtype=wp.vec3),
-  off: int,
+  offset: int,
   obs: wp.array2d(dtype=float),
 ):
   w = wp.tid()
+  cube = xpos[w, cube_body]
+  quat = xquat[w, cube_body]  # MuJoCo order (w, x, y, z)
   g = goal[w]
   for i in range(3):
-    c = qpos[w, cube_qadr + i]
-    obs[w, off + i] = c
-    obs[w, off + 7 + i] = g[i]
-    obs[w, off + 10 + i] = g[i] - c
+    obs[w, offset + i] = cube[i]
+    obs[w, offset + 7 + i] = g[i]
+    obs[w, offset + 10 + i] = g[i] - cube[i]
   for i in range(4):
-    obs[w, off + 3 + i] = qpos[w, cube_qadr + 3 + i]
+    obs[w, offset + 3 + i] = quat[i]
 
 
 class PickPlaceEnv:
@@ -245,7 +232,7 @@ class PickPlaceEnv:
   def __init__(self, backend: MjWarpBackend, cfg: PickPlaceConfig = PickPlaceConfig()):
     if not isinstance(backend, MjWarpBackend):
       raise TypeError("PickPlaceEnv runs on the MJWarp backend (use device='cpu' for Mac debugging)")
-    self.b, self.cfg = backend, cfg
+    self.backend, self.cfg = backend, cfg
     self.nworld, self.device = backend.nworld, backend.device
     scene, mjm = backend.scene, backend.mjm
     self.narm = backend.narm
@@ -256,13 +243,14 @@ class PickPlaceEnv:
     for osc, robot in zip(self.oscs, scene.robots):
       osc.check_compatible(robot.actuator_mode)
 
-    cube_j = mjm.joint("cube_free")
-    self._cube_qadr, self._cube_dofadr = int(cube_j.qposadr[0]), int(cube_j.dofadr[0])
+    cube_joint = mjm.joint("cube_free")
+    self._cube_qadr, self._cube_dofadr = int(cube_joint.qposadr[0]), int(cube_joint.dofadr[0])
+    self._cube_body = mjm.body(scene.cube_body).id
     self._goal_mocap = int(mjm.body(scene.goal_body).mocapid[0])
     self._finger_qadr = [int(mjm.jnt_qposadr[mjm.actuator(r.gripper_actuator).trnid[0]]) for r in scene.robots]
-    self._grip_range = [(r.gripper_open, r.gripper_closed) for r in scene.robots]
-    self._ws = [(wp.vec3(*(np.add(cfg.workspace_lo, m.pos))), wp.vec3(*(np.add(cfg.workspace_hi, m.pos))))
-                for m in scene.mounts]
+    self._grip_range = [(r.gripper_ctrl(False), r.gripper_ctrl(True)) for r in scene.robots]
+    self._workspace = [(wp.vec3(*np.add(cfg.workspace_lo, m.pos)), wp.vec3(*np.add(cfg.workspace_hi, m.pos)))
+                       for m in scene.mounts]
     self._cube0 = wp.vec3(*scene.cfg.cube_pos)
     self._goal0 = wp.vec3(*scene.cfg.goal_pos)
     self._epoch = 0
@@ -278,12 +266,11 @@ class PickPlaceEnv:
       self.done = wp.zeros(self.nworld, dtype=int)
       self.success = wp.zeros(self.nworld, dtype=int)
       self.goal = wp.zeros(self.nworld, dtype=wp.vec3)
-      self.grip = [wp.full(self.nworld, o, dtype=float) for o, _ in self._grip_range]
+      self.grip = [wp.full(self.nworld, grip_open, dtype=float) for grip_open, _ in self._grip_range]
       self.step_count = wp.zeros(self.nworld, dtype=int)
       self._reset_key = wp.zeros(self.nworld, dtype=int)  # 0 = home keyframe for all
       self._tcp_sites = wp.array([v.tcp_site_id for v in backend.views], dtype=int)
-      self._idx = [(wp.array(v.qpos_adr, dtype=int), wp.array(v.dof_adr, dtype=int)) for v in backend.views]
-    down = np.tile(quat_wxyz_to_mat(TOP_DOWN_QUAT)[0], (self.nworld, 1, 1)).astype(np.float32)
+    down = broadcast(quat_to_mat(TOP_DOWN_QUAT), (self.nworld, 3, 3))
     for osc in self.oscs:
       osc.target_rot.assign(down)
 
@@ -300,20 +287,20 @@ class PickPlaceEnv:
 
   def step(self, action: wp.array):
     """action: (nworld, action_dim) warp array on the env device. Returns (obs, reward, done) warp arrays."""
-    b, c = self.b, self.cfg
-    for a, v in enumerate(b.views):
-      lo, hi = self._ws[a]
-      g_open, g_closed = self._grip_range[a]
+    backend, cfg, d = self.backend, self.cfg, self.backend.d
+    for arm, view in enumerate(backend.views):
+      lo, hi = self._workspace[arm]
+      grip_open, grip_closed = self._grip_range[arm]
       wp.launch(_apply_action_kernel, dim=self.nworld,
-                inputs=[action, ACTIONS_PER_ARM * a, b.d.site_xpos, v.tcp_site_id, c.action_scale, lo, hi, g_open,
-                        g_closed],
-                outputs=[self.oscs[a].target_pos, self.grip[a]], device=self.device)
-      b.set_gripper(self.grip[a], arm=a)
-    b.control_substeps(self.oscs, c.decimation)
-    mjw.kinematics(b.m, b.d)
+                inputs=[action, ACTIONS_PER_ARM * arm, d.site_xpos, view.tcp_site_id, cfg.action_scale, lo, hi,
+                        grip_open, grip_closed],
+                outputs=[self.oscs[arm].target_pos, self.grip[arm]], device=self.device)
+      backend.set_gripper(self.grip[arm], arm=arm)
+    backend.control_substeps(self.oscs, cfg.decimation)
+    backend.kinematics()
     wp.launch(_reward_done_kernel, dim=self.nworld,
-              inputs=[b.d.site_xpos, self._tcp_sites, b.d.qpos, self._cube_qadr, self.goal,
-                      b.scene.cfg.cube_half_size, c.success_tol, c.episode_steps, self.step_count],
+              inputs=[d.site_xpos, self._tcp_sites, d.xpos, self._cube_body, self.goal,
+                      backend.scene.cfg.cube_half_size, cfg.success_tol, cfg.episode_steps, self.step_count],
               outputs=[self.reward, self.done, self.success, self._reset_key], device=self.device)
     self._masked_reset()
     self._observe()
@@ -321,25 +308,25 @@ class PickPlaceEnv:
 
   # --- internals -------------------------------------------------------------
   def _masked_reset(self):
-    b, c = self.b, self.cfg
-    b.reset_data(self._reset_key)  # not mjw.reset_data_keyframe: the backend keeps the overflow bits across resets
+    backend, cfg, d = self.backend, self.cfg, self.backend.d
+    backend.reset_data(self._reset_key)  # not mjw.reset_data_keyframe: the backend keeps the overflow bits
     self._epoch += 1
     wp.launch(_randomize_kernel, dim=self.nworld,
-              inputs=[c.seed, self._epoch, self._reset_key, self._cube_qadr, self._cube_dofadr, self._cube0,
-                      self._goal0, c.cube_xy_range, c.goal_xy_range, self._goal_mocap],
-              outputs=[b.d.qpos, b.d.qvel, b.d.mocap_pos, self.goal, self.step_count], device=self.device)
+              inputs=[cfg.seed, self._epoch, self._reset_key, self._cube_qadr, self._cube_dofadr, self._cube0,
+                      self._goal0, cfg.cube_xy_range, cfg.goal_xy_range, self._goal_mocap],
+              outputs=[d.qpos, d.qvel, d.mocap_pos, self.goal, self.step_count], device=self.device)
     for osc, home in zip(self.oscs, self.home_tcp):
       wp.launch(_reset_target_kernel, dim=self.nworld, inputs=[self._reset_key, home], outputs=[osc.target_pos],
                 device=self.device)
 
   def _observe(self):
-    b, L = self.b, self.layout
-    mjw.kinematics(b.m, b.d)
-    for a, v in enumerate(b.views):
-      qa, da = self._idx[a]
+    backend, layout, d = self.backend, self.layout, self.backend.d
+    backend.kinematics()
+    for arm in range(self.narm):
+      state = backend.robot_state(needs=frozenset(), arm=arm)  # q, dq, tcp only
       wp.launch(_arm_obs_kernel, dim=self.nworld,
-                inputs=[qa, da, self._finger_qadr[a], v.tcp_site_id, self._cube_qadr, b.d.qpos, b.d.qvel,
-                        b.d.site_xpos, L.arm_offsets[a]],
+                inputs=[state.q, state.dq, state.tcp_pos, d.qpos, self._finger_qadr[arm], d.xpos, self._cube_body,
+                        layout.arm_offsets[arm]],
                 outputs=[self.obs], device=self.device)
-    wp.launch(_shared_obs_kernel, dim=self.nworld, inputs=[self._cube_qadr, b.d.qpos, self.goal, L.shared],
+    wp.launch(_shared_obs_kernel, dim=self.nworld, inputs=[d.xpos, d.xquat, self._cube_body, self.goal, layout.shared],
               outputs=[self.obs], device=self.device)

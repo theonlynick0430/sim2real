@@ -61,6 +61,10 @@ class RobotConfig:
   def ndof(self) -> int:
     return len(self.arm_joints)
 
+  def gripper_ctrl(self, closed: bool) -> float:
+    """Gripper actuator ctrl for a closed / open command."""
+    return self.gripper_closed if closed else self.gripper_open
+
   def replace(self, **kw) -> "RobotConfig":
     return dataclasses.replace(self, **kw)
 

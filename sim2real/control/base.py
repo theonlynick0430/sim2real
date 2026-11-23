@@ -7,7 +7,6 @@ a CUDA graph on GPU and runs unchanged on Warp-CPU (Mac sim / real robot).
 
 from __future__ import annotations
 
-import numpy as np
 import warp as wp
 
 from sim2real.robots.config import ActuatorMode
@@ -35,7 +34,3 @@ class Controller:
 
   def compute(self, state: RobotState) -> wp.array:
     raise NotImplementedError
-
-  # host helpers
-  def _arr(self, value, shape) -> np.ndarray:
-    return np.broadcast_to(np.asarray(value, np.float32), shape).copy()

@@ -33,6 +33,7 @@ RobotConfig ──► Scene (MjSpec → MjModel) ──► MjWarpBackend (cuda |
 | `sim2real/dynamics/kernels.py` | MJWarp Data → RobotState gather kernels | `sim2real-backends` |
 | `sim2real/control/` | `Controller` base, `JointPD`, `JointImpedance`, `OSC`, `linalg(n)` | `sim2real-controllers` |
 | `sim2real/envs/` | batched `PickPlaceEnv`, scripted policies | `sim2real-envs` |
+| `sim2real/utils.py` | shared host helpers: `broadcast`, `quat_to_mat` (pose math goes through MuJoCo `mju_*`) | — |
 | `sim2real/planning/` | GPU IK / motion planning on cuRoboV2 (no collision), MJCF→URDF export. Self-contained: only `adapters.py` may import other sim2real modules (enforced by `tests/test_planning_urdf.py`). Torch/cuRobo imported lazily; Linux + CUDA only | `sim2real-planning` |
 | `examples/` | runnable scripts (below); `_scenes.py` / `_expert.py` are shared helpers, not entry points | — |
 
@@ -76,12 +77,17 @@ Python and uv).
 | `gpu_bench.py --nworld ...` | throughput / memory sweep | — |
 
 All take `--device` (default: CUDA if present, else Warp-CPU). Viewer scripts take `--headless`; on macOS run
-them with `mjpython`. Viewing is display-only: each frame `backend.to_mjdata(0, out=vis)` copies world 0 into a
-`mujoco.MjData` that `mujoco.viewer.launch_passive` draws, then `viewer.sync()`. Close with
-`examples._scenes.close_viewer` (joins the render thread; avoids exit segfaults). Warp-CPU runs ~350 physics
+them with `mjpython`. Viewing is display-only and wrapped by `examples._scenes.Viewer(backend, headless)`: each
+`sync(dt)` copies world 0 into a `mujoco.MjData` (`backend.to_mjdata(0, out=...)`) that
+`mujoco.viewer.launch_passive` draws, paced to real time; `close()` joins the render thread (`close_viewer`;
+avoids exit segfaults). Warp-CPU runs ~350 physics
 steps/s for one world, so playback is ~0.7x real time. To view a new script or env, follow the same pattern.
 
 ## Style
+
+Prefer official APIs for kinematics, dynamics and pose math (MuJoCo `mj_*` / `mju_*`, MJWarp `mjw.*`, Warp
+builtins such as `wp.quat_to_axis_angle`) over hand-written versions; MJWarp's `mujoco_warp._src` is private.
+Shared host helpers live in `sim2real/utils.py`; the planning package keeps its own (it must stay self-contained).
 
 2-space indentation, 120-col lines, `from __future__ import annotations` in typed modules, frozen dataclasses for
 config. Keep abstractions minimal: add an interface only when a second implementation exists.

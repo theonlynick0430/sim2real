@@ -4,7 +4,7 @@ Each robot is loaded from its own MJCF/URDF (`robot_spec`, which applies the
 config: actuator mode, extra sites, contact excludes) and attached at its mount
 pose with a name prefix (`compose_robots`), so one arm and several arms share
 the same robot-level edits. The scene owns everything that is *not* a robot (objects, solver
-options, contact budget). Output is a compiled MjModel both backends consume.
+options, contact budget). Output is the compiled MjModel the MJWarp backend consumes.
 """
 
 from __future__ import annotations
@@ -173,23 +173,23 @@ def build_scene(
   spec.add_texture(name="grid", type=mujoco.mjtTexture.mjTEXTURE_2D, builtin=mujoco.mjtBuiltin.mjBUILTIN_CHECKER,
                    rgb1=[0.2, 0.3, 0.4], rgb2=[0.1, 0.2, 0.3], width=300, height=300)
   spec.add_material(name="grid", textures=["", "grid"], texrepeat=[5, 5], texuniform=True, reflectance=0.2)
-  wb = spec.worldbody
-  wb.add_light(pos=[0, 0, 1.5], dir=[0, 0, -1], type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL)
+  world = spec.worldbody
+  world.add_light(pos=[0, 0, 1.5], dir=[0, 0, -1], type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL)
 
   # Table surface (robot base sits on it at z=0).
-  wb.add_geom(name="table", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[1, 1, 0.05], material="grid",
+  world.add_geom(name="table", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[1, 1, 0.05], material="grid",
               friction=list(cfg.friction))
 
   # Cube.
-  h = cfg.cube_half_size
-  cube = wb.add_body(name="cube", pos=list(cfg.cube_pos))
+  half = cfg.cube_half_size
+  cube = world.add_body(name="cube", pos=list(cfg.cube_pos))
   cube.add_freejoint(name="cube_free")
-  cube.add_geom(name="cube_geom", type=mujoco.mjtGeom.mjGEOM_BOX, size=[h, h, h], mass=cfg.cube_mass,
+  cube.add_geom(name="cube_geom", type=mujoco.mjtGeom.mjGEOM_BOX, size=[half] * 3, mass=cfg.cube_mass,
                 rgba=[0.8, 0.2, 0.2, 1], friction=list(cfg.friction), condim=4)
 
-  # Goal marker: mocap body, visual only (mocap_pos is per-world state in both backends).
-  goal = wb.add_body(name="goal", mocap=True, pos=list(cfg.goal_pos))
-  goal.add_geom(type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[h, 0, 0], rgba=[0.2, 0.8, 0.2, 0.4],
+  # Goal marker: mocap body, visual only (mocap_pos is per-world state in MJWarp).
+  goal = world.add_body(name="goal", mocap=True, pos=list(cfg.goal_pos))
+  goal.add_geom(type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[half, 0, 0], rgba=[0.2, 0.8, 0.2, 0.4],
                 contype=0, conaffinity=0, group=1)
 
   # One scene-level "home" keyframe (keyframes must cover full nq/nu).
@@ -197,11 +197,11 @@ def build_scene(
   qpos = mjm.qpos0.copy()
   ctrl = np.zeros(mjm.nu)
   for robot in (m.resolved for m in mounts):
-    for jname, q in zip(robot.arm_joints, robot.home_qpos):
-      qpos[mjm.joint(jname).qposadr[0]] = q
+    for joint, q in zip(robot.arm_joints, robot.home_qpos):
+      qpos[mjm.joint(joint).qposadr[0]] = q
     if robot.actuator_mode == ActuatorMode.POSITION:
-      for aname, q in zip(robot.arm_actuators, robot.home_qpos):
-        ctrl[mjm.actuator(aname).id] = q
+      for actuator, q in zip(robot.arm_actuators, robot.home_qpos):
+        ctrl[mjm.actuator(actuator).id] = q
     if robot.gripper_actuator:
       ctrl[mjm.actuator(robot.gripper_actuator).id] = robot.gripper_open
   spec.add_key(name="home", qpos=qpos.tolist(), ctrl=ctrl.tolist(),

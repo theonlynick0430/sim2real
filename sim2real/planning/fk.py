@@ -18,21 +18,24 @@ class MujocoFK:
   def __init__(self, urdf_path: str | Path, joint_names: Sequence[str], tool_link: str):
     self.model = mujoco.MjModel.from_xml_path(str(urdf_path))
     self.data = mujoco.MjData(self.model)
-    self.qadr = np.array([self.model.joint(j).qposadr[0] for j in joint_names])
-    self.dofadr = np.array([self.model.joint(j).dofadr[0] for j in joint_names])
+    joints = [self.model.joint(j).id for j in joint_names]
+    self.qpos_adr = self.model.jnt_qposadr[joints]
+    self.dof_adr = self.model.jnt_dofadr[joints]
     self.tool = self.model.body(tool_link).id
-    self.lower = self.model.jnt_range[[self.model.joint(j).id for j in joint_names], 0].copy()
-    self.upper = self.model.jnt_range[[self.model.joint(j).id for j in joint_names], 1].copy()
+    self.lower, self.upper = self.model.jnt_range[joints].T.copy()
+
+  def _set(self, q) -> None:
+    """Set the arm joints and run kinematics (body poses in `self.data`)."""
+    self.data.qpos[self.qpos_adr] = q
+    mujoco.mj_kinematics(self.model, self.data)
 
   def __call__(self, q) -> tuple[np.ndarray, np.ndarray]:
     """q (B, dof) -> tool pos (B, 3), quat wxyz (B, 4), in the base frame."""
     q = np.atleast_2d(np.asarray(q, np.float64))
     pos, quat = np.empty((len(q), 3)), np.empty((len(q), 4))
     for i, qi in enumerate(q):
-      self.data.qpos[self.qadr] = qi
-      mujoco.mj_kinematics(self.model, self.data)
-      pos[i] = self.data.xpos[self.tool]
-      quat[i] = self.data.xquat[self.tool]
+      self._set(qi)
+      pos[i], quat[i] = self.data.xpos[self.tool], self.data.xquat[self.tool]
     return pos, quat
 
   def ee_trajectory(self, q, dq) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -43,18 +46,16 @@ class MujocoFK:
     """
     q, dq = np.asarray(q, np.float64), np.asarray(dq, np.float64)
     lead, dof = q.shape[:-1], q.shape[-1]
-    qf, dqf = q.reshape(-1, dof), dq.reshape(-1, dof)
-    pos, quat, vel = np.empty((len(qf), 3)), np.empty((len(qf), 4)), np.empty((len(qf), 6))
+    q, dq = q.reshape(-1, dof), dq.reshape(-1, dof)
+    pos, quat, vel = np.empty((len(q), 3)), np.empty((len(q), 4)), np.empty((len(q), 6))
     jacp, jacr = np.zeros((3, self.model.nv)), np.zeros((3, self.model.nv))
-    for i, (qi, dqi) in enumerate(zip(qf, dqf)):
-      self.data.qpos[self.qadr] = qi
-      mujoco.mj_kinematics(self.model, self.data)
+    for i, (qi, dqi) in enumerate(zip(q, dq)):
+      self._set(qi)
       mujoco.mj_comPos(self.model, self.data)  # cdof / subtree_com, needed by mj_jacBody
       mujoco.mj_jacBody(self.model, self.data, jacp, jacr, self.tool)
-      pos[i] = self.data.xpos[self.tool]
-      quat[i] = self.data.xquat[self.tool]
-      vel[i, :3] = jacp[:, self.dofadr] @ dqi
-      vel[i, 3:] = jacr[:, self.dofadr] @ dqi
+      pos[i], quat[i] = self.data.xpos[self.tool], self.data.xquat[self.tool]
+      vel[i, :3] = jacp[:, self.dof_adr] @ dqi
+      vel[i, 3:] = jacr[:, self.dof_adr] @ dqi
     return pos.reshape(*lead, 3), quat.reshape(*lead, 4), vel.reshape(*lead, 6)
 
   def sample_q(self, n: int, rng: np.random.Generator, margin: float = 0.05) -> np.ndarray:
@@ -64,9 +65,15 @@ class MujocoFK:
 
 
 def rotation_error(quat_a, quat_b) -> np.ndarray:
-  """Angle [rad] between orientations (B, 4) wxyz, sign-invariant."""
-  # atan2 of |a - b| and |a + b| rather than 2 * arccos(|a . b|): arccos near 1 turns float32 rounding
-  # (~1e-8 in the dot product) into ~5e-4 rad of error; this form is accurate down to ~1e-8 rad.
-  a, b = np.asarray(quat_a, dtype=np.float64), np.asarray(quat_b, dtype=np.float64)
-  d, s = np.linalg.norm(a - b, axis=-1), np.linalg.norm(a + b, axis=-1)
-  return 2.0 * np.arctan2(np.minimum(d, s), np.maximum(d, s))
+  """Angle [rad] between orientations (..., 4) wxyz, sign-invariant, via `mju_subQuat`.
+
+  mju_subQuat's angle comes from atan2, so it stays accurate for tiny angles even with float32 inputs
+  (2 * arccos(|a . b|) would turn ~1e-8 of rounding into ~5e-4 rad).
+  """
+  a, b = np.broadcast_arrays(np.asarray(quat_a, np.float64), np.asarray(quat_b, np.float64))
+  diff = np.zeros(3)
+  angles = np.empty(len(a.reshape(-1, 4)))
+  for i, (qa, qb) in enumerate(zip(a.reshape(-1, 4), b.reshape(-1, 4))):
+    mujoco.mju_subQuat(diff, qa, qb)
+    angles[i] = np.linalg.norm(diff)
+  return angles.reshape(a.shape[:-1])

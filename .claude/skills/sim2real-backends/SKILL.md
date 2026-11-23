@@ -11,15 +11,19 @@ description: The sim2real MJWarp backend (one sim path on CUDA or Warp-CPU), how
 MuJoCo C runtime path. `device=None` picks Warp's default (CUDA if present, else CPU). On Warp-CPU everything is
 identical except CUDA graph capture is skipped. Surface:
 
-- physics: `reset()`, `step1()`, `step2()`, `control_substeps(ctrls, n)` (n × [step1, per-arm controller →
-  `set_arm_ctrl`, step2])
+- physics: `reset()`, `forward()`, `kinematics()`, `step1()`, `step2()`, `control_substeps(ctrls, n)`
+  (n × [step1, per-arm controller → `set_arm_ctrl`, step2])
+- **Every MJWarp call runs under `wp.ScopedDevice(backend.device)`**: MJWarp launches on the *current* Warp
+  device, which is `cuda:0` on a GPU machine even for a `device="cpu"` backend. Call `backend.forward()` /
+  `backend.kinematics()` from envs and scripts rather than `mjw.*` directly.
 - robot I/O (per arm): `robot_state(needs, arm=0)`, `set_arm_ctrl(cmd, arm=0)`, `set_gripper(value, arm=0)`
 - `views` / `states` tuples (one per arm, `scene.mounts` order); `view` / `state` / `narm` shortcuts
 - host accessors — **sync points, scripts/tests only**: `body_pos`, `body_quat`, `set_mocap_pos`,
   `set_body_free_pose`, `to_mjdata(world, out)`
 
 `RobotView.from_model(mjm, cfg)` resolves names → `qpos_adr`, `dof_adr`, `act_ids`, `tcp_site_id`,
-`tcp_body_id`, `gripper_act_id`, and `m_csr_index` (dense n×n → CSR M index, -1 = structural zero).
+`tcp_body_id`, `gripper_act_id`, and `m_csr_index` (dense n×n → CSR M index, -1 = structural zero). The index is
+built by MuJoCo itself: `mj_fullM` on a probe `MjData` whose `M` holds 1..nC (`robot_view.csr_index`).
 
 ## How RobotState is filled (float32, N worlds)
 
@@ -31,7 +35,8 @@ identical except CUDA graph capture is skipped. Surface:
 | TCP | `d.site_xpos/xmat` |
 
 `tests/test_dynamics_parity.py` checks all of these against MuJoCo C (`mj_fullM`, `mj_jacSite`) as a test-only
-oracle. Viewing: `to_mjdata(0, out=vis)` + `mujoco.viewer.launch_passive(...).sync()` (macOS: `mjpython`).
+oracle. Viewing: `examples._scenes.Viewer(backend, headless)` wraps `to_mjdata(0, out=vis)` +
+`mujoco.viewer.launch_passive(...).sync()` with real-time pacing (macOS: `mjpython`).
 
 ## Validated API facts (mujoco / mujoco-warp 3.17.0; guarded by `tests/test_api_contract.py`)
 

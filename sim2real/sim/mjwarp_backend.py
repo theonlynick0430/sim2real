@@ -5,6 +5,7 @@ capture is device-specific. Surface:
 
   reset()                       -> all worlds to the scene's home keyframe
   step1() / step2()             -> split physics step; controllers run in between on *current* M, J, bias
+  kinematics()                  -> refresh positions (site/body poses) without stepping
   robot_state(needs, arm=0)     -> RobotState of one arm (warp arrays, backend device)
   set_arm_ctrl(cmd, arm=0)      -> write (nworld, n) command into that arm's actuators
   set_gripper(value, arm=0)     -> gripper ctrl, scalar or (nworld,) array
@@ -27,18 +28,19 @@ import mujoco_warp as mjw
 import numpy as np
 import warp as wp
 
-from sim2real.dynamics import kernels as K
+from sim2real.dynamics import kernels
 from sim2real.sim.robot_view import RobotView
 from sim2real.sim.scene import Scene
 from sim2real.sim.state import ALL_NEEDS, NEED_J, NEED_M, RobotState
+from sim2real.utils import broadcast
 
 
 @wp.kernel
-def _or_overflow_kernel(src: wp.array(dtype=int), acc: wp.array(dtype=int)):
-  """acc |= src, per world. MJWarp's reset_data_keyframe zeroes d.overflow for the worlds it resets, so the
-  backend folds the bits into `acc` before every reset; `overflow()` reports acc | d.overflow."""
+def _or_overflow_kernel(src: wp.array(dtype=int), bits: wp.array(dtype=int)):
+  """bits |= src, per world. MJWarp's reset_data_keyframe zeroes d.overflow for the worlds it resets, so the
+  backend folds them into `bits` before every reset; `overflow()` reports bits | d.overflow."""
   w = wp.tid()
-  acc[w] = acc[w] | src[w]
+  bits[w] = bits[w] | src[w]
 
 
 @dataclasses.dataclass
@@ -53,8 +55,8 @@ class _ArmIndex:
   grip: wp.array  # (nworld,) host-set gripper values
 
 
-def as_controller_list(controllers, narm: int) -> list:
-  ctrls = list(controllers) if isinstance(controllers, (list, tuple)) else [controllers]
+def _as_tuple(controllers, narm: int) -> tuple:
+  ctrls = tuple(controllers) if isinstance(controllers, (list, tuple)) else (controllers,)
   if len(ctrls) > narm:
     raise ValueError(f"{len(ctrls)} controllers for {narm} arm(s)")
   return ctrls
@@ -100,7 +102,7 @@ class MjWarpBackend:
       self._jacp = wp.zeros((nworld, 3, self.mjm.nv), dtype=float)
       self._jacr = wp.zeros((nworld, 3, self.mjm.nv), dtype=float)
       self._jac_point = wp.zeros(nworld, dtype=wp.vec3)
-      self._overflow_acc = wp.zeros(nworld, dtype=int)  # see _or_overflow_kernel
+      self._overflow_bits = wp.zeros(nworld, dtype=int)  # see _or_overflow_kernel
       self._home = self.mjm.key(scene.home_key).id
     self.reset()
 
@@ -117,64 +119,75 @@ class MjWarpBackend:
     return len(self.views)
 
   # --- physics -----------------------------------------------------------------
+  # Every MJWarp call runs under ScopedDevice: MJWarp launches on the current Warp device, which is cuda:0 on a GPU
+  # machine even when this backend lives on the CPU.
   def reset_data(self, world_mask: wp.array | None = None) -> None:
     """Masked keyframe reset of `d` only (no forward): `world_mask` (nworld,) int keyframe ids, -1 = keep.
 
     Always reset through here, not `mjw.reset_data_keyframe` directly, so the overflow bits MJWarp zeroes on
-    reset are folded into the accumulator first (see `overflow()`).
+    reset are saved first (see `overflow()`).
     """
     with wp.ScopedDevice(self.device):
-      wp.launch(_or_overflow_kernel, dim=self.nworld, inputs=[self.d.overflow, self._overflow_acc])
+      wp.launch(_or_overflow_kernel, dim=self.nworld, inputs=[self.d.overflow, self._overflow_bits])
       mjw.reset_data_keyframe(self.m, self.d, self._home if world_mask is None else world_mask)
 
   def reset(self, world_mask: wp.array | None = None) -> None:
     """Reset to home keyframe (`world_mask` as in `reset_data`) and run forward."""
     self.reset_data(world_mask)
+    self.forward()
+
+  def forward(self) -> None:
     with wp.ScopedDevice(self.device):
       mjw.forward(self.m, self.d)
 
+  def kinematics(self) -> None:
+    with wp.ScopedDevice(self.device):
+      mjw.kinematics(self.m, self.d)
+
   def step1(self) -> None:
-    mjw.step1(self.m, self.d)
+    with wp.ScopedDevice(self.device):
+      mjw.step1(self.m, self.d)
 
   def step2(self) -> None:
-    mjw.step2(self.m, self.d)
+    with wp.ScopedDevice(self.device):
+      mjw.step2(self.m, self.d)
 
   # --- robot I/O -----------------------------------------------------------------
   def robot_state(self, needs=ALL_NEEDS, arm: int = 0) -> RobotState:
-    s, v, ix, d, nw = self.states[arm], self.views[arm], self._arms[arm], self.d, self.nworld
-    n = v.ndof
-    wp.launch(
-      K.gather_state_kernel,
-      dim=(nw, n),
-      inputs=[ix.qpos_adr, ix.dof_adr, v.tcp_site_id, d.qpos, d.qvel, d.qfrc_bias, d.site_xpos, d.site_xmat],
-      outputs=[s.q, s.dq, s.bias, s.tcp_pos, s.tcp_rot],
-      device=self.device,
-    )
-    if NEED_M in needs:
-      wp.launch(K.gather_mass_kernel, dim=(nw, n, n), inputs=[ix.m_idx, d.M], outputs=[s.M], device=self.device)
-    if NEED_J in needs:
-      wp.launch(K.tcp_point_kernel, dim=nw, inputs=[v.tcp_site_id, d.site_xpos], outputs=[self._jac_point],
-                device=self.device)
-      mjw.jac(self.m, d, self._jacp, self._jacr, self._jac_point, ix.jac_body)
-      wp.launch(K.gather_jac_kernel, dim=(nw, n), inputs=[ix.dof_adr, self._jacp, self._jacr], outputs=[s.J],
-                device=self.device)
-    return s
+    state, view, index, d = self.states[arm], self.views[arm], self._arms[arm], self.d
+    n, nworld = view.ndof, self.nworld
+    with wp.ScopedDevice(self.device):
+      wp.launch(
+        kernels.gather_state_kernel,
+        dim=(nworld, n),
+        inputs=[index.qpos_adr, index.dof_adr, view.tcp_site_id, d.qpos, d.qvel, d.qfrc_bias, d.site_xpos,
+                d.site_xmat],
+        outputs=[state.q, state.dq, state.bias, state.tcp_pos, state.tcp_rot],
+      )
+      if NEED_M in needs:
+        wp.launch(kernels.gather_mass_kernel, dim=(nworld, n, n), inputs=[index.m_idx, d.M], outputs=[state.M])
+      if NEED_J in needs:
+        wp.launch(kernels.tcp_point_kernel, dim=nworld, inputs=[view.tcp_site_id, d.site_xpos],
+                  outputs=[self._jac_point])
+        mjw.jac(self.m, d, self._jacp, self._jacr, self._jac_point, index.jac_body)
+        wp.launch(kernels.gather_jac_kernel, dim=(nworld, n), inputs=[index.dof_adr, self._jacp, self._jacr],
+                  outputs=[state.J])
+    return state
 
   def set_arm_ctrl(self, cmd: wp.array, arm: int = 0) -> None:
-    wp.launch(K.scatter_ctrl_kernel, dim=(self.nworld, self.views[arm].ndof), inputs=[self._arms[arm].act_ids, cmd],
-              outputs=[self.d.ctrl], device=self.device)
+    wp.launch(kernels.scatter_ctrl_kernel, dim=(self.nworld, self.views[arm].ndof),
+              inputs=[self._arms[arm].act_ids, cmd], outputs=[self.d.ctrl], device=self.device)
 
   def set_gripper(self, value, arm: int = 0) -> None:
     """`value`: python float, numpy (nworld,), or warp array (nworld,) on device."""
-    act = self.views[arm].gripper_act_id
-    if act < 0:
+    actuator = self.views[arm].gripper_act_id
+    if actuator < 0:
       return
-    if isinstance(value, wp.array):
-      arr = value
-    else:
-      arr = self._arms[arm].grip
-      arr.assign(np.broadcast_to(np.asarray(value, np.float32), (self.nworld,)))
-    wp.launch(K.set_ctrl_column_kernel, dim=self.nworld, inputs=[act, arr], outputs=[self.d.ctrl], device=self.device)
+    if not isinstance(value, wp.array):
+      self._arms[arm].grip.assign(broadcast(value, self.nworld))
+      value = self._arms[arm].grip
+    wp.launch(kernels.set_ctrl_column_kernel, dim=self.nworld, inputs=[actuator, value], outputs=[self.d.ctrl],
+              device=self.device)
 
   def control_substeps(self, controllers, n: int) -> None:
     """Run `n` physics steps with the low-level controller(s) in the loop.
@@ -182,7 +195,7 @@ class MjWarpBackend:
     `controllers`: one controller (arm 0) or a sequence with one entry per arm (None = leave that arm's
     ctrl unchanged). All arms see the same physics step. On CUDA the n steps are one replayed graph.
     """
-    ctrls = tuple(as_controller_list(controllers, self.narm))
+    ctrls = _as_tuple(controllers, self.narm)
     if not self.use_graph:
       return self._substeps(ctrls, n)
     key = (tuple(map(id, ctrls)), n)
@@ -198,9 +211,9 @@ class MjWarpBackend:
   def _substeps(self, ctrls, n: int) -> None:
     for _ in range(n):
       self.step1()
-      for arm, c in enumerate(ctrls):
-        if c is not None:
-          self.set_arm_ctrl(c.compute(self.robot_state(c.requires, arm)), arm)
+      for arm, ctrl in enumerate(ctrls):
+        if ctrl is not None:
+          self.set_arm_ctrl(ctrl.compute(self.robot_state(ctrl.requires, arm)), arm)
       self.step2()
 
   # --- diagnostics -----------------------------------------------------------------
@@ -213,21 +226,21 @@ class MjWarpBackend:
     `contacts` / `ccd` / `nefc` are the bits that mean a contact or constraint was silently dropped;
     `ITERATIONS` / `LS_ITERATIONS` only mean the solver hit its iteration cap.
     """
-    bits = int(np.bitwise_or.reduce(self.d.overflow.numpy() | self._overflow_acc.numpy()))
+    bits = int(np.bitwise_or.reduce(self.d.overflow.numpy() | self._overflow_bits.numpy()))
     if clear:
       self.d.overflow.zero_()
-      self._overflow_acc.zero_()
-    ov = mjw.OverflowType
+      self._overflow_bits.zero_()
+    flag = mjw.OverflowType
     return {
       "nacon": int(self.d.nacon.numpy()[0]),
       "naconmax": int(self.d.naconmax),
       "naccdmax": int(self.d.naccdmax),
       "nefc_max": int(self.d.nefc.numpy().max()),
       "njmax": int(self.d.njmax),
-      "contacts": bool(bits & (ov.BROADPHASE | ov.NARROWPHASE)),
-      "ccd": bool(bits & ov.CCD),
-      "nefc": bool(bits & (ov.NEFC | ov.NJMAX_NNZ)),
-      "flags": [f.name for f in ov if f.value and f != ov.ALL and bits & f.value],
+      "contacts": bool(bits & (flag.BROADPHASE | flag.NARROWPHASE)),
+      "ccd": bool(bits & flag.CCD),
+      "nefc": bool(bits & (flag.NEFC | flag.NJMAX_NNZ)),
+      "flags": [f.name for f in flag if f.value and f != flag.ALL and bits & f.value],
     }
 
   # --- host accessors -----------------------------------------------------------------
@@ -238,21 +251,22 @@ class MjWarpBackend:
     return self.d.xquat.numpy()[:, self.mjm.body(name).id]
 
   def set_mocap_pos(self, name: str, pos: np.ndarray) -> None:
-    mp = self.d.mocap_pos.numpy()
-    mp[:, self.mjm.body(name).mocapid[0]] = np.broadcast_to(pos, (self.nworld, 3))
-    self.d.mocap_pos.assign(mp)
+    mocap_pos = self.d.mocap_pos.numpy()
+    mocap_pos[:, self.mjm.body(name).mocapid[0]] = broadcast(pos, (self.nworld, 3))
+    self.d.mocap_pos.assign(mocap_pos)
 
   def set_body_free_pose(self, joint: str, pos: np.ndarray, quat: np.ndarray | None = None) -> None:
+    """Place a free-joint body (same pose in every world), zero its velocity and run forward."""
     jnt = self.mjm.joint(joint)
     qpos, qvel = self.d.qpos.numpy(), self.d.qvel.numpy()
-    a, v = jnt.qposadr[0], jnt.dofadr[0]
-    qpos[:, a : a + 3] = np.broadcast_to(pos, (self.nworld, 3))
+    q0, v0 = jnt.qposadr[0], jnt.dofadr[0]
+    qpos[:, q0 : q0 + 3] = broadcast(pos, (self.nworld, 3))
     if quat is not None:
-      qpos[:, a + 3 : a + 7] = np.broadcast_to(quat, (self.nworld, 4))
-    qvel[:, v : v + 6] = 0
+      qpos[:, q0 + 3 : q0 + 7] = broadcast(quat, (self.nworld, 4))
+    qvel[:, v0 : v0 + 6] = 0
     self.d.qpos.assign(qpos)
     self.d.qvel.assign(qvel)
-    mjw.forward(self.m, self.d)
+    self.forward()
 
   def to_mjdata(self, world: int = 0, out=None):
     """MjData of one world (for the passive viewer / debugging); refreshes `out` in place if given."""

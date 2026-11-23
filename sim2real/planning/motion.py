@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 
-import numpy as np
+import numpy as np  # noqa: F401  (type annotations)
 
 from .config import PlannerConfig
 
@@ -29,10 +29,9 @@ class Trajectory:
   ee_vel: "torch.Tensor | np.ndarray | None" = None  # (B, T, 6) [linear, angular]; zero past length[b]  # noqa: F821
 
   def numpy(self) -> "Trajectory":
-    f = lambda x: x.detach().cpu().numpy() if hasattr(x, "detach") else np.asarray(x)  # noqa: E731
-    g = lambda x: None if x is None else f(x)  # noqa: E731
-    return Trajectory(f(self.q), f(self.dq), f(self.ddq), self.dt, f(self.length).astype(int),
-                      f(self.success).astype(bool), self.solve_time, g(self.ee_pos), g(self.ee_quat), g(self.ee_vel))
+    from ._curobo import to_numpy
+
+    return to_numpy(self)
 
 
 class GpuMotionPlanner:
@@ -50,7 +49,7 @@ class GpuMotionPlanner:
 
     self.cfg, self.batch, self.plan_kwargs = cfg, batch, plan_kwargs
     self._fk = None  # host FK for return_ee, built on first use
-    self._c = _curobo
+    self._curobo = _curobo
     mp_cfg = MotionPlannerCfg.create(
       robot=_curobo.robot_cfg(cfg),
       scene_model=None,
@@ -75,18 +74,19 @@ class GpuMotionPlanner:
   def plan_pose(self, q_start, pos, quat_wxyz, return_ee: bool = False) -> Trajectory:
     """q_start (B,dof); target tool pose pos (B,3), quat_wxyz (B,4) in the base frame.
     return_ee: also fill `ee_pos` / `ee_quat` / `ee_vel` (planned tool-frame trajectory, base frame)."""
-    c, cfg = self._c, self.cfg
-    q0, pos, quat = c.as_tensor(q_start, cfg, 2), c.as_tensor(pos, cfg, 2), c.as_tensor(quat_wxyz, cfg, 2)
+    curobo, cfg = self._curobo, self.cfg
+    q0 = curobo.as_tensor(q_start, cfg, 2)
+    pos, quat = curobo.as_tensor(pos, cfg, 2), curobo.as_tensor(quat_wxyz, cfg, 2)
     traj = self._run(q0, lambda q, i: self.planner.plan_pose(
-      c.goal_pose(cfg, pos[i], quat[i]), c.joint_state(q, cfg.joint_names), **self.plan_kwargs))
+      curobo.goal_pose(cfg, pos[i], quat[i]), curobo.joint_state(q, cfg.joint_names), **self.plan_kwargs))
     return self._add_ee(traj) if return_ee else traj
 
   def plan_joint(self, q_start, q_goal, return_ee: bool = False) -> Trajectory:
     """q_start (B,dof) -> q_goal (B,dof). return_ee as in `plan_pose`."""
-    c, cfg = self._c, self.cfg
-    q0, qg = c.as_tensor(q_start, cfg, 2), c.as_tensor(q_goal, cfg, 2)
+    curobo, cfg = self._curobo, self.cfg
+    q0, qg = curobo.as_tensor(q_start, cfg, 2), curobo.as_tensor(q_goal, cfg, 2)
     traj = self._run(q0, lambda q, i: self.planner.plan_cspace(
-      c.joint_state(qg[i], cfg.joint_names), c.joint_state(q, cfg.joint_names), **self.plan_kwargs))
+      curobo.joint_state(qg[i], cfg.joint_names), curobo.joint_state(q, cfg.joint_names), **self.plan_kwargs))
     return self._add_ee(traj) if return_ee else traj
 
   # -- internals --
@@ -115,7 +115,7 @@ class GpuMotionPlanner:
     tic = time.perf_counter()
     batch = q0.shape[0]
     if self.batch:
-      idx = self._c.pad_batch(torch.arange(batch, device=q0.device), self.cfg.max_batch_size)
+      idx = self._curobo.pad_batch(torch.arange(batch, device=q0.device), self.cfg.max_batch_size)
       parts = [self._extract(plan_one(q0[idx], idx), q0[idx])]
     else:
       parts = [self._extract(plan_one(q0[i:i + 1], slice(i, i + 1)), q0[i:i + 1]) for i in range(batch)]
@@ -148,12 +148,12 @@ class GpuMotionPlanner:
     ddq = per_problem(js.acceleration) if js.acceleration is not None else torch.zeros_like(q)
     T = q.shape[1]
     if res.interpolated_last_tstep is not None:
-      length = self._c.first_per_problem(torch.as_tensor(res.interpolated_last_tstep, device=q.device), n)
+      length = self._curobo.first_per_problem(torch.as_tensor(res.interpolated_last_tstep, device=q.device), n)
       length = length.long().clamp(1, T)  # clamp copies
     else:
       length = torch.full((n,), T, dtype=torch.long, device=q.device)
     dt = float(js.dt.reshape(-1)[0]) if js.dt is not None else self.cfg.interpolation_dt
-    success = self._c.first_per_problem(res.success, n).bool().to(q.device).clone()
+    success = self._curobo.first_per_problem(res.success, n).bool().to(q.device).clone()
     return Trajectory(q, dq, ddq, dt, length, success)
 
   @staticmethod

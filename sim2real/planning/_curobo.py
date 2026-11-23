@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import torch
 from curobo.types import DeviceCfg, GoalToolPose, JointState, Pose
 
@@ -45,6 +47,13 @@ def pad_batch(t: torch.Tensor, size: int) -> torch.Tensor:
   if t.shape[0] == size:
     return t
   return torch.cat([t, t[-1:].expand(size - t.shape[0], *t.shape[1:])], 0)
+
+
+def to_numpy(result):
+  """Copy of a result dataclass (IKResult, Trajectory) with every torch tensor field moved to a numpy array."""
+  fields = {f.name: getattr(result, f.name) for f in dataclasses.fields(result)}
+  return dataclasses.replace(
+    result, **{k: v.detach().cpu().numpy() for k, v in fields.items() if isinstance(v, torch.Tensor)})
 
 
 def first_per_problem(x, batch: int) -> torch.Tensor:

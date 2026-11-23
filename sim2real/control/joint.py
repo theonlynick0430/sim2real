@@ -21,6 +21,7 @@ from sim2real.control.base import Controller
 from sim2real.control.linalg import linalg
 from sim2real.robots.config import ActuatorMode
 from sim2real.sim.state import NEED_BIAS, NEED_M, RobotState
+from sim2real.utils import broadcast
 
 
 @wp.kernel
@@ -51,7 +52,7 @@ def _pd_torque_kernel(
 
 @functools.cache
 def _computed_torque_kernel(n: int):
-  la = linalg(n)
+  ops = linalg(n)
 
   @wp.kernel(module="unique")
   def kernel(
@@ -68,10 +69,10 @@ def _computed_torque_kernel(n: int):
     cmd: wp.array2d(dtype=float),
   ):
     w = wp.tid()
-    acc = la.vec()
+    acc = ops.vec()
     for i in range(n):
       acc[i] = ddq_des[w, i] + kp[i] * (q_des[w, i] - q[w, i]) + kd[i] * (dq_des[w, i] - dq[w, i])
-    tau = la.load_mat(M, w) @ acc
+    tau = ops.load_mat(M, w) @ acc
     for i in range(n):
       cmd[w, i] = wp.clamp(tau[i] + bias[w, i], -tau_limit[i], tau_limit[i])
 
@@ -82,14 +83,14 @@ class _JointTargets(Controller):
   def __init__(self, view, nworld, kp, kd, device=None):
     super().__init__(view, nworld, device)
     with wp.ScopedDevice(self.device):
-      self.q_des = wp.array(np.tile(view.home_qpos, (nworld, 1)), dtype=float)
+      self.q_des = wp.array(broadcast(view.home_qpos, (nworld, self.n)), dtype=float)
       self.dq_des = wp.zeros((nworld, self.n), dtype=float)
-      self.kp = wp.array(self._arr(kp, (self.n,)), dtype=float)
-      self.kd = wp.array(self._arr(kd, (self.n,)), dtype=float)
+      self.kp = wp.array(broadcast(kp, self.n), dtype=float)
+      self.kd = wp.array(broadcast(kd, self.n), dtype=float)
 
   def set_target(self, q_des, dq_des=None) -> None:
-    self.q_des.assign(self._arr(q_des, (self.nworld, self.n)))
-    self.dq_des.assign(self._arr(0.0 if dq_des is None else dq_des, (self.nworld, self.n)))
+    self.q_des.assign(broadcast(q_des, (self.nworld, self.n)))
+    self.dq_des.assign(broadcast(0.0 if dq_des is None else dq_des, (self.nworld, self.n)))
 
 
 class JointPD(_JointTargets):
@@ -120,7 +121,7 @@ class JointImpedance(_JointTargets):
   output = ActuatorMode.TORQUE
 
   def __init__(self, view, nworld, stiffness, damping=None, inertia_shaped=False, device=None):
-    stiffness = np.broadcast_to(np.asarray(stiffness, np.float32), (view.ndof,))
+    stiffness = broadcast(stiffness, view.ndof)
     if damping is None:
       if inertia_shaped:  # unit task inertia -> critical damping
         damping = 2.0 * np.sqrt(stiffness)
@@ -140,7 +141,7 @@ class JointImpedance(_JointTargets):
     if ddq_des is not None and not self.inertia_shaped:
       raise ValueError("ddq_des feedforward needs inertia_shaped=True (tau = M ddq_des + ...)")
     super().set_target(q_des, dq_des)
-    self.ddq_des.assign(self._arr(0.0 if ddq_des is None else ddq_des, (self.nworld, self.n)))
+    self.ddq_des.assign(broadcast(0.0 if ddq_des is None else ddq_des, (self.nworld, self.n)))
 
   def compute(self, state: RobotState) -> wp.array:
     if self.inertia_shaped:

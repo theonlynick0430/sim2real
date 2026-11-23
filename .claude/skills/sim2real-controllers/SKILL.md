@@ -27,7 +27,8 @@ Rules:
 - Targets live in preallocated buffers; update them with `.assign()` (host) or a kernel (RL env), never
   by rebinding the attribute (the graph holds the old buffer address).
 - Always clamp torque output to `tau_limit`.
-- Host helpers (`set_target`, `hold_current`) are for scripts; `_arr(value, shape)` broadcasts to float32.
+- Host helpers (`set_target`, `hold_current`) are for scripts; `sim2real.utils.broadcast(value, shape)` broadcasts
+  to float32 and `sim2real.utils.quat_to_mat` converts wxyz quats (via `mju_quat2Mat`).
 
 ## Fixed-size linear algebra (`linalg.py`)
 

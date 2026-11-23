@@ -18,8 +18,9 @@ class IKResult:
   solve_time: float = 0.0  # s, as reported by cuRobo
 
   def numpy(self) -> "IKResult":
-    f = lambda x: x.detach().cpu().numpy() if hasattr(x, "detach") else np.asarray(x)  # noqa: E731
-    return IKResult(f(self.q), f(self.success).astype(bool), f(self.pos_err), f(self.rot_err), self.solve_time)
+    from ._curobo import to_numpy
+
+    return to_numpy(self)
 
 
 class GpuIK:
@@ -31,7 +32,7 @@ class GpuIK:
     from . import _curobo
 
     self.cfg = cfg
-    self._c = _curobo
+    self._curobo = _curobo
     ik_cfg = InverseKinematicsCfg.create(
       robot=_curobo.robot_cfg(cfg),
       scene_model=None,
@@ -55,10 +56,10 @@ class GpuIK:
     current_q (B,dof): optional; ranks solutions by closeness to this configuration (default: cfg.default_q).
     Returns torch tensors on the planner device (`.numpy()` for host arrays).
     """
-    c, cfg = self._c, self.cfg
-    pos, quat = c.as_tensor(pos, cfg, 2), c.as_tensor(quat_wxyz, cfg, 2)
+    curobo, cfg = self._curobo, self.cfg
+    pos, quat = curobo.as_tensor(pos, cfg, 2), curobo.as_tensor(quat_wxyz, cfg, 2)
     batch = pos.shape[0]
-    seed = c.as_tensor(seed_q, cfg, 2).unsqueeze(1) if seed_q is not None else None
+    seed = curobo.as_tensor(seed_q, cfg, 2).unsqueeze(1) if seed_q is not None else None
     # Always give cuRobo a current state. Its goal buffer (and the CUDA graph captured from it) is built on the
     # first call; a current state appearing later changes the buffer structure and needs a graph reset, which
     # cuRobo disables by default ("CUDA graph reset is not available"), and omitting it later silently reuses
@@ -66,13 +67,13 @@ class GpuIK:
     # cuRobo pads to max_batch_size itself.)
     if current_q is None:
       current_q = np.tile(np.asarray(cfg.default_q, dtype=np.float32), (batch, 1))
-    current = c.joint_state(c.as_tensor(current_q, cfg, 2), cfg.joint_names)
-    res = self.solver.solve_pose(c.goal_pose(cfg, pos, quat), current_state=current, seed_config=seed)
+    current = curobo.joint_state(curobo.as_tensor(current_q, cfg, 2), cfg.joint_names)
+    res = self.solver.solve_pose(curobo.goal_pose(cfg, pos, quat), current_state=current, seed_config=seed)
     q = res.js_solution.position if res.js_solution is not None else res.solution
     return IKResult(
       q=q[:batch] if q.ndim == 2 else q[:batch, 0],  # (B, dof) or ranked (B, seeds, dof)
-      success=c.first_per_problem(res.success, batch).bool(),
-      pos_err=c.first_per_problem(res.position_error, batch),
-      rot_err=c.first_per_problem(res.rotation_error, batch),
+      success=curobo.first_per_problem(res.success, batch).bool(),
+      pos_err=curobo.first_per_problem(res.position_error, batch),
+      rot_err=curobo.first_per_problem(res.rotation_error, batch),
       solve_time=float(res.solve_time),
     )

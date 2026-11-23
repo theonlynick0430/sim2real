@@ -14,7 +14,8 @@ def test_versions_match():
 
 
 def test_mujoco_c_api():
-  mjm = mujoco.MjModel.from_xml_string("<mujoco><worldbody><body><joint/><geom size='.1'/><site name='s'/></body></worldbody></mujoco>")
+  mjm = mujoco.MjModel.from_xml_string(
+    "<mujoco><worldbody><body><joint/><geom size='.1'/><site name='s'/></body></worldbody></mujoco>")
   mjd = mujoco.MjData(mjm)
   mujoco.mj_forward(mjm, mjd)
   assert hasattr(mjd, "M") and not hasattr(mjd, "qM")  # 3.17: qM -> M (CSR, nC)
@@ -32,8 +33,8 @@ def test_mjwarp_api():
              "get_data_into"):
     assert hasattr(mjw, fn), fn
   data_fields = {f.name for f in dataclasses.fields(mjw.Data)}
-  for f in ("qpos", "qvel", "ctrl", "M", "qfrc_bias", "site_xpos", "site_xmat", "xpos", "mocap_pos", "nacon", "nefc",
-            "naccdmax", "overflow"):
+  for f in ("qpos", "qvel", "ctrl", "M", "qfrc_bias", "site_xpos", "site_xmat", "xpos", "xquat", "mocap_pos", "nacon",
+            "nefc", "naccdmax", "overflow"):
     assert f in data_fields, f
   assert "qM" not in data_fields
   assert list(inspect.signature(mjw.jac).parameters) == ["m", "d", "jacp", "jacr", "point", "body"]

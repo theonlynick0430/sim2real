@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 import warp as wp
 
@@ -21,8 +22,29 @@ def warp_device():
 @pytest.fixture(scope="session")
 def yam_bimanual_scene():
   """Two torque-mode YAMs (bases at y = +-0.2) with the relay cube/goal layout."""
-  from sim2real.envs.scripted import RELAY_CUBE_POS, RELAY_GOAL_POS
-  from sim2real.robots import yam_bimanual
-  from sim2real.sim.scene import SceneConfig, build_scene
+  from examples._scenes import make_scene
 
-  return build_scene(yam_bimanual(), SceneConfig(cube_pos=RELAY_CUBE_POS, goal_pos=RELAY_GOAL_POS))
+  return make_scene(bimanual=True)
+
+
+def _randomize_arms(backend, rng, margin: float, vel_std: float):
+  """Random arm joint positions (`margin` [rad] inside the limits) and velocities in every world, then forward.
+
+  Returns the full (qpos, qvel) arrays that were set, float64, for building MuJoCo C references.
+  """
+  mjm, nworld = backend.mjm, backend.nworld
+  qpos, qvel = backend.d.qpos.numpy().astype(np.float64), np.zeros((nworld, mjm.nv))
+  for view in backend.views:
+    lo, hi = mjm.jnt_range[[mjm.joint(j).id for j in view.cfg.arm_joints]].T
+    qpos[:, view.qpos_adr] = rng.uniform(lo + margin, hi - margin, (nworld, view.ndof))
+    qvel[:, view.dof_adr] = rng.normal(0, vel_std, (nworld, view.ndof))
+  backend.d.qpos.assign(qpos.astype(np.float32))
+  backend.d.qvel.assign(qvel.astype(np.float32))
+  backend.forward()
+  return qpos, qvel
+
+
+@pytest.fixture(scope="session")
+def randomize_arms():
+  """`randomize_arms(backend, rng, margin, vel_std) -> (qpos, qvel)`, see `_randomize_arms`."""
+  return _randomize_arms

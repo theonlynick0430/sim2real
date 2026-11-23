@@ -120,7 +120,7 @@ sim2real/
 
 | quantity | MJWarp |
 |---|---|
-| M | `d.M` is **CSR lower-triangular `(nworld, nC)`**; we expand it with a precomputed index table (`RobotView.m_csr_index`) |
+| M | `d.M` is **CSR lower-triangular `(nworld, nC)`**; we expand it with a precomputed index table (`RobotView.m_csr_index`, built with MuJoCo's `mj_fullM`) |
 | J (TCP) | `mjw.jac(m, d, jacp, jacr, point, body)`, a host-level launch over all worlds that returns all `nv` columns; we gather the arm's columns |
 | bias = C·q̇ + g | `d.qfrc_bias` |
 | Λ, J⁺, null space | custom, inside the controller kernel |
@@ -159,7 +159,7 @@ sim2real/
 
 ## MuJoCo / MJWarp API notes (validated against 3.17.0; enforced by `tests/test_api_contract.py`)
 
-- **The `qM` → `M` (CSR, `nC`) rename** happened in both MuJoCo C and MJWarp. `mj_fullM` (used by the parity test) is now `(m, d, dst)`.
+- **The `qM` → `M` (CSR, `nC`) rename** happened in both MuJoCo C and MJWarp. `mj_fullM` (used for the CSR index table and by the parity test) is now `(m, d, dst)`.
 - **`make_data(nconmax, njmax, nccdmax)`:**
   - `nconmax` is per world, drawn from a shared pool `naconmax = nconmax·nworld`.
   - `njmax` is a hard per-world limit.

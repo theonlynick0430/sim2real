@@ -5,8 +5,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import mujoco
-
 from sim2real.robots.config import RobotConfig
 from sim2real.sim.scene import robot_spec
 
@@ -18,10 +16,8 @@ def export_robot_urdf(robot: RobotConfig, workdir: str | Path, velocity=2.0) -> 
   """Export `robot`'s arm (root body -> `tcp_site`, with config `extra_sites` applied) to
   `<workdir>/<name>.urdf`. velocity: URDF joint velocity limit(s) [rad/s] used by the planner."""
   m = robot_spec(robot).compile()
-  body = int(m.site_bodyid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, robot.tcp_site)])
-  while int(m.body_parentid[body]) != 0:  # robot root = the world child above the TCP body
-    body = int(m.body_parentid[body])
-  return export_urdf(m, m.body(body).name, robot.tcp_site, robot.arm_joints, Path(workdir) / f"{robot.name}.urdf",
+  root = m.body_rootid[m.site_bodyid[m.site(robot.tcp_site).id]]  # the world child above the TCP body
+  return export_urdf(m, m.body(root).name, robot.tcp_site, robot.arm_joints, Path(workdir) / f"{robot.name}.urdf",
                      effort=robot.torque_limits, velocity=velocity, robot_name=robot.name)
 
 

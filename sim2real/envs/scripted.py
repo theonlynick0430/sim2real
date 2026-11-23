@@ -4,7 +4,10 @@ Produces OSC TCP targets + gripper commands from cube/goal positions. Used to
 test physics + controllers end-to-end on CPU and GPU with identical code.
 """
 
+import mujoco
 import numpy as np
+
+from sim2real.utils import quat_to_mat
 
 # Tool z-axis pointing down (180 deg about world y), MuJoCo wxyz.
 TOP_DOWN_QUAT = np.array([0.0, 0.0, 1.0, 0.0])
@@ -12,19 +15,19 @@ TOP_DOWN_QUAT = np.array([0.0, 0.0, 1.0, 0.0])
 
 def top_down_quat(yaw: float = 0.0) -> np.ndarray:
   """Tool pointing down, rotated by `yaw` about world z (wxyz)."""
-  qz = np.array([np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)])
-  w1, x1, y1, z1 = qz
-  w2, x2, y2, z2 = TOP_DOWN_QUAT
-  return np.array([w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2, w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-                   w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2, w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2])
+  spin, quat = np.zeros(4), np.zeros(4)
+  mujoco.mju_axisAngle2Quat(spin, np.array([0.0, 0.0, 1.0]), yaw)
+  mujoco.mju_mulQuat(quat, spin, TOP_DOWN_QUAT)
+  return quat
 
 
 def box_grasp_yaw(quat_wxyz: np.ndarray) -> float:
   """Yaw that aligns a parallel-jaw gripper with the faces of an upright box, folded into
   [-45, 45] deg (box faces repeat every 90 deg)."""
-  w, x, y, z = np.asarray(quat_wxyz, np.float64).reshape(4)
-  yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+  rot = quat_to_mat(np.asarray(quat_wxyz).reshape(4))
+  yaw = np.arctan2(rot[1, 0], rot[0, 0])
   return float((yaw + np.pi / 4) % (np.pi / 2) - np.pi / 4)
+
 
 # (name, duration [s], gripper closed?)
 PHASES = (
@@ -52,8 +55,7 @@ class ScriptedPickPlace:
 
   def __call__(self, t: float, cube_pos0: np.ndarray, goal_pos: np.ndarray):
     """t: time since episode start. cube_pos0: cube pos at episode start (nworld,3). Returns (pos, gripper_closed)."""
-    i = self.phase(t)
-    name, _, closed = PHASES[i]
+    name, _, closed = PHASES[self.phase(t)]
     up = np.array([0.0, 0.0, self.hover])
     grasp = cube_pos0 + np.array([0.0, 0.0, self.grasp_z_offset])
     target = {

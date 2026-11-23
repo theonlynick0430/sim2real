@@ -62,8 +62,7 @@ def test_scripted_relay(yam_bimanual_scene, warp_device):
     quat = b.body_quat(scene.cube_body)[0]
     for arm, (pos, closed, q) in enumerate(relay(t, cube0, b.body_pos(scene.cube_body)[0], goal, quat)):
       oscs[arm].set_target(pos, quat_wxyz=q)
-      r = scene.robots[arm]
-      b.set_gripper(r.gripper_closed if closed else r.gripper_open, arm=arm)
+      b.set_gripper(scene.robots[arm].gripper_ctrl(closed), arm=arm)
     b.control_substeps(oscs, 10)
     t += 0.02
     if handed_off is None and t >= relay.t_switch:

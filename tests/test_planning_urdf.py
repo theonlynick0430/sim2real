@@ -21,17 +21,18 @@ def yam_urdf(tmp_path_factory):
 
 
 def _mjcf_tcp(robot, q):
-  """TCP pose in the robot root-body frame, from the original MJCF."""
+  """TCP pose in the robot root-body frame, from the original MJCF (MuJoCo pose math as the oracle)."""
   m = robot_spec(robot).compile()
   d = mujoco.MjData(m)
   for k, j in enumerate(robot.arm_joints):
     d.qpos[m.joint(j).qposadr[0]] = q[k]
   mujoco.mj_kinematics(m, d)
   base, site = m.body("arm").id, m.site(robot.tcp_site).id
-  Rb = d.xmat[base].reshape(3, 3)
-  pos = Rb.T @ (d.site_xpos[site] - d.xpos[base])
-  quat = np.zeros(4)
-  mujoco.mju_mat2Quat(quat, (Rb.T @ d.site_xmat[site].reshape(3, 3)).ravel())
+  site_quat, base_inv_pos, base_inv_quat = np.zeros(4), np.zeros(3), np.zeros(4)
+  mujoco.mju_mat2Quat(site_quat, d.site_xmat[site])
+  mujoco.mju_negPose(base_inv_pos, base_inv_quat, d.xpos[base], d.xquat[base])
+  pos, quat = np.zeros(3), np.zeros(4)
+  mujoco.mju_mulPose(pos, quat, base_inv_pos, base_inv_quat, d.site_xpos[site], site_quat)
   return pos, quat
 
 

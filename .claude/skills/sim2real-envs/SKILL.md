@@ -12,9 +12,11 @@ Per policy step, all Warp kernels, no host syncs:
 ```
 _apply_action_kernel (per arm)  → OSC target_pos + gripper value
 control_substeps(oscs, decimation)  → CUDA graph: decimation × [step1, OSC per arm, step2]
-mjw.kinematics → _reward_done_kernel → _masked_reset → _observe (_arm_obs_kernel per arm + _shared_obs_kernel)
+backend.kinematics() → _reward_done_kernel → _masked_reset → _observe (_arm_obs_kernel per arm + _shared_obs_kernel)
 ```
 
+- **Reads**: the arm obs block reuses `backend.robot_state(needs=frozenset(), arm)` (q, dq, TCP); the cube comes
+  from body poses `d.xpos` / `d.xquat` after `backend.kinematics()`. Only the reset kernel writes the cube's qpos.
 - **Rates**: physics/OSC 500 Hz (`dt=2 ms`), policy 50 Hz (`decimation=10`), episodes 250 steps.
 - **Action** `(nworld, 4·narm)`: per arm `[dx, dy, dz]` ∈ [-1,1] × `action_scale` **relative to the current TCP**
   (accumulating into the target caused wind-up) + gripper (>0 closes). Targets clamped to a per-arm workspace

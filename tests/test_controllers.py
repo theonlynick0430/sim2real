@@ -1,7 +1,6 @@
 """Controller kernels vs NumPy references, plus closed-loop behaviour on MJWarp."""
 
 import mujoco
-import mujoco_warp as mjw
 import numpy as np
 import pytest
 
@@ -11,80 +10,73 @@ from sim2real.robots import ActuatorMode
 from sim2real.sim.mjwarp_backend import MjWarpBackend
 
 
-def _random_state(scene, seed, device):
+def _random_state(scene, seed, device, randomize_arms):
   b = MjWarpBackend(scene, nworld=1, device=device)
-  rng = np.random.default_rng(seed)
-  v = b.view
-  lo, hi = scene.mjm.jnt_range[:6].T
-  qpos, qvel = b.d.qpos.numpy(), b.d.qvel.numpy()
-  qpos[0, v.qpos_adr] = rng.uniform(lo + 0.2, hi - 0.2)
-  qvel[0, v.dof_adr] = rng.normal(0, 0.5, 6)
-  b.d.qpos.assign(qpos)
-  b.d.qvel.assign(qvel)
-  mjw.forward(b.m, b.d)
+  randomize_arms(b, np.random.default_rng(seed), margin=0.2, vel_std=0.5)
   return b, b.robot_state()
 
 
-def _np(s):
-  return {k: getattr(s, k).numpy()[0].astype(np.float64) for k in ("q", "dq", "tcp_pos", "tcp_rot", "J", "M", "bias")}
+def _host(state):
+  return {k: getattr(state, k).numpy()[0].astype(np.float64)
+          for k in ("q", "dq", "tcp_pos", "tcp_rot", "J", "M", "bias")}
 
 
 def _rotvec(R):
-  q = np.zeros(4)
+  """Rotation vector (shortest rotation) of a rotation matrix, via MuJoCo."""
+  q, v = np.zeros(4), np.zeros(3)
   mujoco.mju_mat2Quat(q, R.reshape(-1))
-  if q[0] < 0:
-    q = -q
-  v = np.zeros(3)
-  mujoco.mju_quat2Vel(v, q, 1.0)
+  mujoco.mju_quat2Vel(v, q if q[0] >= 0 else -q, 1.0)
   return v
 
 
-def osc_reference(s, tp, tR, kp, kd, q_null, kpn, kdn, lam, lim, vel=np.zeros(6), acc=np.zeros(6)):
+def osc_reference(s, target_pos, target_rot, kp, kd, q_null, kp_null, kd_null, damping, limit, vel=np.zeros(6),
+                  acc=np.zeros(6)):
   J, M = s["J"], s["M"]
   Minv = np.linalg.inv(M)
-  Lam = np.linalg.inv(J @ Minv @ J.T + lam * np.eye(6))
-  e = np.concatenate([tp - s["tcp_pos"], _rotvec(tR @ s["tcp_rot"].T)])
-  F = Lam @ (acc + kp * e + kd * (vel - J @ s["dq"]))
-  tau0 = kpn * (q_null - s["q"]) - kdn * s["dq"]
-  Jbar = Minv @ J.T @ Lam
+  Lambda = np.linalg.inv(J @ Minv @ J.T + damping * np.eye(6))
+  err = np.concatenate([target_pos - s["tcp_pos"], _rotvec(target_rot @ s["tcp_rot"].T)])
+  F = Lambda @ (acc + kp * err + kd * (vel - J @ s["dq"]))
+  tau0 = kp_null * (q_null - s["q"]) - kd_null * s["dq"]
+  Jbar = Minv @ J.T @ Lambda
   tau = J.T @ F + (np.eye(len(tau0)) - J.T @ Jbar.T) @ tau0 + s["bias"]
-  return np.clip(tau, -lim, lim)
+  return np.clip(tau, -limit, limit)
+
+
+def _osc_reference(osc, state, target_pos, limit, vel=np.zeros(6), acc=np.zeros(6)):
+  return osc_reference(_host(state), target_pos, osc.target_rot.numpy()[0].astype(np.float64), osc.kp.numpy(),
+                       osc.kd.numpy(), osc.q_null.numpy(), osc.kp_null, osc.kd_null, osc.lambda_damping, limit, vel,
+                       acc)
 
 
 @pytest.mark.parametrize("seed", range(5))
-def test_osc_matches_reference(yam_torque_scene, warp_device, seed):
-  b, st = _random_state(yam_torque_scene, seed, warp_device)
+def test_osc_matches_reference(yam_torque_scene, warp_device, randomize_arms, seed):
+  b, st = _random_state(yam_torque_scene, seed, warp_device, randomize_arms)
   osc = OSC(b.view, 1, kp_pos=150, kp_rot=60, device=b.device)
   rng = np.random.default_rng(100 + seed)
-  tp = st.tcp_pos.numpy()[0] + rng.normal(0, 0.03, 3)
-  osc.set_target(tp, quat_wxyz=TOP_DOWN_QUAT)
+  target = st.tcp_pos.numpy()[0] + rng.normal(0, 0.03, 3)
+  osc.set_target(target, quat_wxyz=TOP_DOWN_QUAT)
   tau = osc.compute(st).numpy()[0]
-  tR = osc.target_rot.numpy()[0].astype(np.float64)
-  ref = osc_reference(_np(st), tp, tR, osc.kp.numpy(), osc.kd.numpy(), osc.q_null.numpy(), osc.kp_null, osc.kd_null,
-                      osc.lambda_damping, b.view.torque_limits)
-  np.testing.assert_allclose(tau, ref, rtol=2e-3, atol=2e-3)
+  np.testing.assert_allclose(tau, _osc_reference(osc, st, target, b.view.torque_limits), rtol=2e-3, atol=2e-3)
 
 
 @pytest.mark.parametrize("seed", range(3))
-def test_osc_feedforward_matches_reference(yam_torque_scene, warp_device, seed):
-  b, st = _random_state(yam_torque_scene, seed, warp_device)
+def test_osc_feedforward_matches_reference(yam_torque_scene, warp_device, randomize_arms, seed):
+  b, st = _random_state(yam_torque_scene, seed, warp_device, randomize_arms)
   osc = OSC(b.view, 1, kp_pos=150, kp_rot=60, device=b.device)
   rng = np.random.default_rng(200 + seed)
-  tp = st.tcp_pos.numpy()[0] + rng.normal(0, 0.03, 3)
+  target = st.tcp_pos.numpy()[0] + rng.normal(0, 0.03, 3)
   vel, acc = rng.normal(0, 0.3, 6), rng.normal(0, 2.0, 6)
-  osc.set_target(tp, quat_wxyz=TOP_DOWN_QUAT, vel=vel, acc=acc)
+  osc.set_target(target, quat_wxyz=TOP_DOWN_QUAT, vel=vel, acc=acc)
   tau = osc.compute(st).numpy()[0]
-  tR = osc.target_rot.numpy()[0].astype(np.float64)
-  ref = osc_reference(_np(st), tp, tR, osc.kp.numpy(), osc.kd.numpy(), osc.q_null.numpy(), osc.kp_null, osc.kd_null,
-                      osc.lambda_damping, b.view.torque_limits, vel, acc)
+  ref = _osc_reference(osc, st, target, b.view.torque_limits, vel, acc)
   np.testing.assert_allclose(tau, ref, rtol=2e-3, atol=2e-3)
-  osc.set_target(tp)  # pose-only call resets the feedforward to zero
+  osc.set_target(target)  # pose-only call resets the feedforward to zero
   assert not osc.target_vel.numpy().any() and not osc.target_acc.numpy().any()
 
 
-def test_joint_controllers_match_reference(yam_torque_scene, warp_device):
-  b, st = _random_state(yam_torque_scene, 7, warp_device)
-  s = _np(st)
+def test_joint_controllers_match_reference(yam_torque_scene, warp_device, randomize_arms):
+  b, st = _random_state(yam_torque_scene, 7, warp_device, randomize_arms)
+  s = _host(st)
   qd = s["q"] + 0.1
   lim = b.view.torque_limits
   imp = JointImpedance(b.view, 1, stiffness=50.0, device=b.device)
@@ -163,7 +155,7 @@ def test_scripted_pick_place(yam_torque_scene, warp_device):
   while t < script.duration:
     pos, closed = script(t, cube0, goal)
     osc.set_target(pos, quat_wxyz=TOP_DOWN_QUAT)
-    b.set_gripper(robot.gripper_closed if closed else robot.gripper_open)
+    b.set_gripper(robot.gripper_ctrl(closed))
     b.control_substeps(osc, 10)
     t += 0.02
   assert np.linalg.norm(b.body_pos("cube")[0] - goal) < 0.02

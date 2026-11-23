@@ -89,12 +89,7 @@ def export_urdf(
   effort / velocity: per-joint (or scalar) URDF limits [Nm or N, rad/s or m/s]; cuRobo uses velocity.
   The tool link is named after `tool_site`, the base link after `base_body`.
   """
-  base = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, base_body)
-  site = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, tool_site)
-  if base < 0:
-    raise ValueError(f"no body {base_body!r}")
-  if site < 0:
-    raise ValueError(f"no site {tool_site!r}")
+  base, site = m.body(base_body).id, m.site(tool_site).id  # KeyError if either name is missing
   joint_names = tuple(joint_names)
   n = len(joint_names)
   effort = np.broadcast_to(np.asarray(effort, np.float64), (n,))
@@ -107,30 +102,29 @@ def export_urdf(
     name, parent = m.body(b).name, m.body(int(m.body_parentid[b])).name
     links.append(f"<link name={quoteattr(name)}>{_inertial(m, b)}</link>")
     origin = _origin(m.body_pos[b], m.body_quat[b])
-    nj = int(m.body_jntnum[b])
-    if nj == 0:
+    njoint = int(m.body_jntnum[b])
+    if njoint == 0:
       joints.append(f'<joint name={quoteattr(name + "_fixed")} type="fixed"><parent link={quoteattr(parent)}/>'
                     f"<child link={quoteattr(name)}/>{origin}</joint>")
       continue
-    if nj > 1:
-      raise ValueError(f"body {name!r} has {nj} joints; URDF needs one joint per link")
+    if njoint > 1:
+      raise ValueError(f"body {name!r} has {njoint} joints; URDF needs one joint per link")
     j = int(m.body_jntadr[b])
-    jtype = int(m.jnt_type[j])
+    joint, jtype = m.joint(j).name, int(m.jnt_type[j])
     if jtype not in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
-      raise ValueError(f"joint {m.joint(j).name!r}: only hinge/slide joints can be exported")
+      raise ValueError(f"joint {joint!r}: only hinge/slide joints can be exported")
     if np.linalg.norm(m.jnt_pos[j]) > 1e-9:
-      raise ValueError(f"joint {m.joint(j).name!r} is offset from its body origin; not supported")
-    jname = m.joint(j).name
-    if len(found) >= n or jname != joint_names[len(found)]:
-      raise ValueError(f"chain joint {jname!r} does not match joint_names {joint_names}")
+      raise ValueError(f"joint {joint!r} is offset from its body origin; not supported")
     k = len(found)
+    if k >= n or joint != joint_names[k]:
+      raise ValueError(f"chain joint {joint!r} does not match joint_names {joint_names}")
     lo, hi = (float(x) for x in (m.jnt_range[j] if m.jnt_limited[j] else (-2 * np.pi, 2 * np.pi)))
-    found.append(jname)
+    found.append(joint)
     lower.append(lo)
     upper.append(hi)
     kind = "revolute" if jtype == mujoco.mjtJoint.mjJNT_HINGE else "prismatic"
     joints.append(
-      f'<joint name={quoteattr(jname)} type="{kind}"><parent link={quoteattr(parent)}/>'
+      f'<joint name={quoteattr(joint)} type="{kind}"><parent link={quoteattr(parent)}/>'
       f'<child link={quoteattr(name)}/>{origin}<axis xyz="{_fmt(m.jnt_axis[j])}"/>'
       f'<limit lower="{lo!r}" upper="{hi!r}" effort="{float(effort[k])!r}" velocity="{float(velocity[k])!r}"/></joint>')
   if tuple(found) != joint_names:

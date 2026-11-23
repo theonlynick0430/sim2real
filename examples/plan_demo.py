@@ -63,13 +63,13 @@ def replay(robot, trajs):
   scene = build_scene(robot)
   m = scene.mjm
   d = mujoco.MjData(m)
-  qadr = [m.joint(j).qposadr[0] for j in robot.arm_joints]
+  qpos_adr = [m.joint(j).qposadr[0] for j in robot.arm_joints]
   viewer = mujoco.viewer.launch_passive(m, d)
   for q, dt in trajs:
     for qt in q:
       if not viewer.is_running():
         break
-      d.qpos[qadr] = qt
+      d.qpos[qpos_adr] = qt
       mujoco.mj_forward(m, d)
       viewer.sync()
       time.sleep(dt)
@@ -78,13 +78,13 @@ def replay(robot, trajs):
 
 
 def main():
-  ap = argparse.ArgumentParser()
-  ap.add_argument("--n-ik", type=int, default=1024, help="batch size for the IK benchmark")
-  ap.add_argument("--n-plan", type=int, default=4, help="sequential plan_pose / plan_joint problems")
-  ap.add_argument("--batch", type=int, default=0, help="also run BatchMotionPlanner on this many problems")
-  ap.add_argument("--headless", action="store_true")
-  ap.add_argument("--seed", type=int, default=0)
-  args = ap.parse_args()
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--n-ik", type=int, default=1024, help="batch size for the IK benchmark")
+  parser.add_argument("--n-plan", type=int, default=4, help="sequential plan_pose / plan_joint problems")
+  parser.add_argument("--batch", type=int, default=0, help="also run BatchMotionPlanner on this many problems")
+  parser.add_argument("--headless", action="store_true")
+  parser.add_argument("--seed", type=int, default=0)
+  args = parser.parse_args()
 
   import torch
 
@@ -102,25 +102,26 @@ def main():
   ik_benchmark(cfg, fk, args.n_ik, rng)
 
   tic = time.perf_counter()
-  mp = GpuMotionPlanner(cfg)
-  mp.warmup()
+  planner = GpuMotionPlanner(cfg)
+  planner.warmup()
   print(f"[plan] planner ready in {time.perf_counter() - tic:.1f} s")
   q0 = np.repeat(np.asarray(robot.home_qpos)[None], args.n_plan, 0)
   pos, quat = fk(fk.sample_q(args.n_plan, rng, margin=0.1))
-  t_pose = report("plan_pose", mp.plan_pose(q0, pos, quat), fk, pos, quat)
+  pose_traj = report("plan_pose", planner.plan_pose(q0, pos, quat), fk, pos, quat)
   q_goal = fk.sample_q(args.n_plan, rng, margin=0.1)
-  t_joint = report("plan_joint", mp.plan_joint(q0, q_goal), fk)
-  print(f"[plan_joint] end joint err max {np.abs(t_joint.q[np.arange(args.n_plan), t_joint.length - 1] - q_goal).max():.4f} rad")
+  joint_traj = report("plan_joint", planner.plan_joint(q0, q_goal), fk)
+  q_end = joint_traj.q[np.arange(args.n_plan), joint_traj.length - 1]
+  print(f"[plan_joint] end joint err max {np.abs(q_end - q_goal).max():.4f} rad")
 
   if args.batch:
-    bmp = GpuMotionPlanner(cfg.replace(max_batch_size=args.batch), batch=True)
-    bmp.warmup()
-    q0b = fk.sample_q(args.batch, rng, margin=0.1)
-    posb, quatb = fk(fk.sample_q(args.batch, rng, margin=0.1))
-    report("batch plan_pose", bmp.plan_pose(q0b, posb, quatb), fk, posb, quatb)
+    batch_planner = GpuMotionPlanner(cfg.replace(max_batch_size=args.batch), batch=True)
+    batch_planner.warmup()
+    q0 = fk.sample_q(args.batch, rng, margin=0.1)
+    pos, quat = fk(fk.sample_q(args.batch, rng, margin=0.1))
+    report("batch plan_pose", batch_planner.plan_pose(q0, pos, quat), fk, pos, quat)
 
   if not args.headless:
-    trajs = [(t.q[b, :t.length[b]], t.dt) for t in (t_pose, t_joint) for b in range(len(t.q)) if t.success[b]]
+    trajs = [(t.q[b, :t.length[b]], t.dt) for t in (pose_traj, joint_traj) for b in range(len(t.q)) if t.success[b]]
     replay(robot, trajs)
 
 
