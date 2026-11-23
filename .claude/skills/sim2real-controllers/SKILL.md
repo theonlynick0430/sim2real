@@ -44,14 +44,19 @@ code. Use `wp.types.matrix(shape=(6, n))` for J-shaped types.
 ## Equations (implemented)
 
 - **JointPD** — POSITION: `cmd = q_des`. TORQUE: `τ = kp(q_des−q) + kd(q̇_des−q̇) [+ b]`.
-- **JointImpedance** — `τ = K(q_des−q) + D(q̇_des−q̇) + b`; inertia-shaped: `τ = M[kp e + kd ė] + b`.
+- **JointImpedance** — `τ = K(q_des−q) + D(q̇_des−q̇) + b`; inertia-shaped (computed torque):
+  `τ = M[q̈_des + kp e + kd ė] + b`. `set_target(q_des, dq_des=None, ddq_des=None)`; `ddq_des` (default 0) only
+  with `inertia_shaped=True` (raises otherwise).
   Default `D = kd_cfg·√(K/kp_cfg)` (keeps configured damping ratio); inertia-shaped default `kd = 2√kp`.
 - **OSC** —
   `e = [p_des−p ; log(R_des Rᵀ)]`, `v = J q̇`,
   `Λ = (J M⁻¹ Jᵀ + εI)⁻¹` (M⁻¹Jᵀ via one Cholesky of M),
-  `F = Λ(Kp e − Kd v)`, `Kd = 2ζ√Kp`,
+  `F = Λ(a_des + Kp e + Kd(v_des − v))`, `Kd = 2ζ√Kp`,
   `τ₀ = kp_null(q_null−q) − kd_null q̇`, `J̄ = M⁻¹JᵀΛ`,
   `τ = JᵀF + (I − JᵀJ̄ᵀ)τ₀ + b`. J̇q̇ neglected.
+  `v_des`/`a_des` = `target_vel`/`target_acc` `(nworld, 6)` world-frame TCP twist [linear, angular] and its
+  derivative; `set_target(pos, quat, vel=None, acc=None)` resets them to 0 when omitted (pose regulation),
+  so pass them every call when tracking a trajectory (e.g. planner `return_ee=True` output).
   Defaults: `kp_pos=400`, `kp_rot=150` (high because YAM joint friction 0.1 makes a deadband), `ε=1e-3`.
 
 ## Adding a controller

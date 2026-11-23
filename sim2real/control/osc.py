@@ -1,12 +1,14 @@
 """Operational-space controller (Khatib), one fused Warp kernel per world.
 
   Lambda   = (J M^-1 J^T + eps I)^-1                       task-space inertia (damped)
-  F        = Lambda [kp e - kd v],  v = J dq                 e = [p_des - p ; log(R_des R^T)]
+  F        = Lambda [a_des + kp e + kd (v_des - v)],  v = J dq     e = [p_des - p ; log(R_des R^T)]
   tau      = J^T F + N^T tau_0 + bias                        bias = C dq + g
   N^T      = I - J^T Jbar^T,  Jbar = M^-1 J^T Lambda          dynamically-consistent null space
   tau_0    = kp_null (q_null - q) - kd_null dq               posture task
 
-J_dot dq is neglected (standard; negligible at manipulation speeds).
+v_des / a_des (world-frame [linear; angular] twist / its derivative of the TCP) default to zero, which is
+pose regulation; set them from a planned EE trajectory for tracking. J_dot dq is neglected (standard;
+negligible at manipulation speeds), so a_des is applied as the task acceleration directly.
 """
 
 
@@ -54,6 +56,8 @@ def _osc_kernel(n: int):
     bias: wp.array2d(dtype=float),
     target_pos: wp.array(dtype=wp.vec3),
     target_rot: wp.array(dtype=wp.mat33),
+    target_vel: wp.array2d(dtype=float),  # (nworld, 6) [linear, angular], world frame
+    target_acc: wp.array2d(dtype=float),  # (nworld, 6)
     kp: wp.array(dtype=float),  # (6,) task stiffness [pos x3, rot x3]
     kd: wp.array(dtype=float),  # (6,)
     q_null: wp.array(dtype=float),
@@ -93,8 +97,8 @@ def _osc_kernel(n: int):
     v = J @ qd
     a = l6.vec()
     for i in range(3):
-      a[i] = kp[i] * e_p[i] - kd[i] * v[i]
-      a[i + 3] = kp[i + 3] * e_r[i] - kd[i + 3] * v[i + 3]
+      a[i] = target_acc[w, i] + kp[i] * e_p[i] + kd[i] * (target_vel[w, i] - v[i])
+      a[i + 3] = target_acc[w, i + 3] + kp[i + 3] * e_r[i] + kd[i + 3] * (target_vel[w, i + 3] - v[i + 3])
     F = Lambda @ a
     tau = wp.transpose(J) @ F
 
@@ -149,15 +153,21 @@ class OSC(Controller):
       self.q_null = wp.array(view.home_qpos, dtype=float)
       self.target_pos = wp.zeros(nworld, dtype=wp.vec3)
       self.target_rot = wp.array(np.tile(np.eye(3, dtype=np.float32), (nworld, 1, 1)), dtype=wp.mat33)
+      self.target_vel = wp.zeros((nworld, 6), dtype=float)
+      self.target_acc = wp.zeros((nworld, 6), dtype=float)
     self._kernel = _osc_kernel(self.n)
 
-  def set_target(self, pos, quat_wxyz=None, rot=None) -> None:
-    """Host helper. pos (3,) or (nworld,3); orientation as MuJoCo wxyz quat or 3x3 matrix."""
+  def set_target(self, pos, quat_wxyz=None, rot=None, vel=None, acc=None) -> None:
+    """Host helper. pos (3,) or (nworld,3); orientation as MuJoCo wxyz quat or 3x3 matrix (kept if neither
+    is given). vel / acc: TCP twist [linear, angular] (6,) or (nworld,6) in the world frame and its
+    derivative, for trajectory tracking; None -> zero (pose regulation, the previous behaviour)."""
     self.target_pos.assign(self._arr(pos, (self.nworld, 3)))
     if quat_wxyz is not None:
       rot = quat_wxyz_to_mat(quat_wxyz)
     if rot is not None:
       self.target_rot.assign(self._arr(rot, (self.nworld, 3, 3)))
+    self.target_vel.assign(self._arr(0.0 if vel is None else vel, (self.nworld, 6)))
+    self.target_acc.assign(self._arr(0.0 if acc is None else acc, (self.nworld, 6)))
 
   def hold_current(self, state: RobotState) -> None:
     wp.copy(self.target_pos, state.tcp_pos)
@@ -169,8 +179,8 @@ class OSC(Controller):
       dim=self.nworld,
       inputs=[
         state.q, state.dq, state.tcp_pos, state.tcp_rot, state.J, state.M, state.bias, self.target_pos,
-        self.target_rot, self.kp, self.kd, self.q_null, self.kp_null, self.kd_null, self.lambda_damping,
-        self.tau_limit,
+        self.target_rot, self.target_vel, self.target_acc, self.kp, self.kd, self.q_null, self.kp_null,
+        self.kd_null, self.lambda_damping, self.tau_limit,
       ],
       outputs=[self.cmd],
       device=self.device,

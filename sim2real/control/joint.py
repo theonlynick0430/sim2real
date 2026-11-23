@@ -7,7 +7,8 @@ JointPD
 
 JointImpedance (TORQUE)
   tau = K (q_des - q) + D (dq_des - dq) + bias            (inertia_shaped=False)
-  tau = M [kp (q_des - q) + kd (dq_des - dq)] + bias      (inertia_shaped=True, computed-torque)
+  tau = M [ddq_des + kp (q_des - q) + kd (dq_des - dq)] + bias   (inertia_shaped=True, computed-torque;
+                                                                   ddq_des = 0 by default)
 """
 
 
@@ -60,6 +61,7 @@ def _computed_torque_kernel(n: int):
     bias: wp.array2d(dtype=float),
     q_des: wp.array2d(dtype=float),
     dq_des: wp.array2d(dtype=float),
+    ddq_des: wp.array2d(dtype=float),
     kp: wp.array(dtype=float),
     kd: wp.array(dtype=float),
     tau_limit: wp.array(dtype=float),
@@ -68,7 +70,7 @@ def _computed_torque_kernel(n: int):
     w = wp.tid()
     acc = la.vec()
     for i in range(n):
-      acc[i] = kp[i] * (q_des[w, i] - q[w, i]) + kd[i] * (dq_des[w, i] - dq[w, i])
+      acc[i] = ddq_des[w, i] + kp[i] * (q_des[w, i] - q[w, i]) + kd[i] * (dq_des[w, i] - dq[w, i])
     tau = la.load_mat(M, w) @ acc
     for i in range(n):
       cmd[w, i] = wp.clamp(tau[i] + bias[w, i], -tau_limit[i], tau_limit[i])
@@ -130,13 +132,23 @@ class JointImpedance(_JointTargets):
     super().__init__(view, nworld, stiffness, damping, device)
     self.inertia_shaped = inertia_shaped
     self.requires = frozenset({NEED_BIAS, NEED_M}) if inertia_shaped else frozenset({NEED_BIAS})
+    with wp.ScopedDevice(self.device):
+      self.ddq_des = wp.zeros((nworld, self.n), dtype=float)
+
+  def set_target(self, q_des, dq_des=None, ddq_des=None) -> None:
+    """ddq_des: joint acceleration feedforward (computed-torque mode only); None -> zero."""
+    if ddq_des is not None and not self.inertia_shaped:
+      raise ValueError("ddq_des feedforward needs inertia_shaped=True (tau = M ddq_des + ...)")
+    super().set_target(q_des, dq_des)
+    self.ddq_des.assign(self._arr(0.0 if ddq_des is None else ddq_des, (self.nworld, self.n)))
 
   def compute(self, state: RobotState) -> wp.array:
     if self.inertia_shaped:
       wp.launch(
         _computed_torque_kernel(self.n),
         dim=self.nworld,
-        inputs=[state.q, state.dq, state.M, state.bias, self.q_des, self.dq_des, self.kp, self.kd, self.tau_limit],
+        inputs=[state.q, state.dq, state.M, state.bias, self.q_des, self.dq_des, self.ddq_des, self.kp, self.kd,
+                self.tau_limit],
         outputs=[self.cmd],
         device=self.device,
       )
