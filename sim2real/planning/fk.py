@@ -19,6 +19,7 @@ class MujocoFK:
     self.model = mujoco.MjModel.from_xml_path(str(urdf_path))
     self.data = mujoco.MjData(self.model)
     self.qadr = np.array([self.model.joint(j).qposadr[0] for j in joint_names])
+    self.dofadr = np.array([self.model.joint(j).dofadr[0] for j in joint_names])
     self.tool = self.model.body(tool_link).id
     self.lower = self.model.jnt_range[[self.model.joint(j).id for j in joint_names], 0].copy()
     self.upper = self.model.jnt_range[[self.model.joint(j).id for j in joint_names], 1].copy()
@@ -33,6 +34,28 @@ class MujocoFK:
       pos[i] = self.data.xpos[self.tool]
       quat[i] = self.data.xquat[self.tool]
     return pos, quat
+
+  def ee_trajectory(self, q, dq) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Tool pose and twist along joint trajectories, in the base frame.
+
+    q, dq (..., dof) -> pos (..., 3), quat wxyz (..., 4), vel (..., 6) = [linear, angular]: the velocity of
+    the tool-frame origin and the tool angular velocity, both on base-frame axes.
+    """
+    q, dq = np.asarray(q, np.float64), np.asarray(dq, np.float64)
+    lead, dof = q.shape[:-1], q.shape[-1]
+    qf, dqf = q.reshape(-1, dof), dq.reshape(-1, dof)
+    pos, quat, vel = np.empty((len(qf), 3)), np.empty((len(qf), 4)), np.empty((len(qf), 6))
+    jacp, jacr = np.zeros((3, self.model.nv)), np.zeros((3, self.model.nv))
+    for i, (qi, dqi) in enumerate(zip(qf, dqf)):
+      self.data.qpos[self.qadr] = qi
+      mujoco.mj_kinematics(self.model, self.data)
+      mujoco.mj_comPos(self.model, self.data)  # cdof / subtree_com, needed by mj_jacBody
+      mujoco.mj_jacBody(self.model, self.data, jacp, jacr, self.tool)
+      pos[i] = self.data.xpos[self.tool]
+      quat[i] = self.data.xquat[self.tool]
+      vel[i, :3] = jacp[:, self.dofadr] @ dqi
+      vel[i, 3:] = jacr[:, self.dofadr] @ dqi
+    return pos.reshape(*lead, 3), quat.reshape(*lead, 4), vel.reshape(*lead, 6)
 
   def sample_q(self, n: int, rng: np.random.Generator, margin: float = 0.05) -> np.ndarray:
     """Uniform joint samples, `margin` (fraction of range) away from each limit."""

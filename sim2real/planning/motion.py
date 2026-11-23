@@ -22,12 +22,17 @@ class Trajectory:
   dt: float  # s between samples
   length: "torch.Tensor | np.ndarray"  # (B,) valid samples per problem
   success: "torch.Tensor | np.ndarray"  # (B,) bool
-  solve_time: float = 0.0  # s, wall clock for the whole call
+  solve_time: float = 0.0  # s, wall clock for the planning call (excludes the end-effector FK below)
+  # Planned end-effector (tool frame) trajectory, base frame; only filled with `return_ee=True`.
+  ee_pos: "torch.Tensor | np.ndarray | None" = None  # (B, T, 3)  # noqa: F821
+  ee_quat: "torch.Tensor | np.ndarray | None" = None  # (B, T, 4) wxyz  # noqa: F821
+  ee_vel: "torch.Tensor | np.ndarray | None" = None  # (B, T, 6) [linear, angular]; zero past length[b]  # noqa: F821
 
   def numpy(self) -> "Trajectory":
     f = lambda x: x.detach().cpu().numpy() if hasattr(x, "detach") else np.asarray(x)  # noqa: E731
+    g = lambda x: None if x is None else f(x)  # noqa: E731
     return Trajectory(f(self.q), f(self.dq), f(self.ddq), self.dt, f(self.length).astype(int),
-                      f(self.success).astype(bool), self.solve_time)
+                      f(self.success).astype(bool), self.solve_time, g(self.ee_pos), g(self.ee_quat), g(self.ee_vel))
 
 
 class GpuMotionPlanner:
@@ -44,6 +49,7 @@ class GpuMotionPlanner:
     from . import _curobo
 
     self.cfg, self.batch, self.plan_kwargs = cfg, batch, plan_kwargs
+    self._fk = None  # host FK for return_ee, built on first use
     self._c = _curobo
     mp_cfg = MotionPlannerCfg.create(
       robot=_curobo.robot_cfg(cfg),
@@ -66,21 +72,39 @@ class GpuMotionPlanner:
     """Capture CUDA graphs up front so the first real plan call is fast."""
     self.planner.warmup(enable_graph=True, num_warmup_iterations=num_iterations)
 
-  def plan_pose(self, q_start, pos, quat_wxyz) -> Trajectory:
-    """q_start (B,dof); target tool pose pos (B,3), quat_wxyz (B,4) in the base frame."""
+  def plan_pose(self, q_start, pos, quat_wxyz, return_ee: bool = False) -> Trajectory:
+    """q_start (B,dof); target tool pose pos (B,3), quat_wxyz (B,4) in the base frame.
+    return_ee: also fill `ee_pos` / `ee_quat` / `ee_vel` (planned tool-frame trajectory, base frame)."""
     c, cfg = self._c, self.cfg
     q0, pos, quat = c.as_tensor(q_start, cfg, 2), c.as_tensor(pos, cfg, 2), c.as_tensor(quat_wxyz, cfg, 2)
-    return self._run(q0, lambda q, i: self.planner.plan_pose(
+    traj = self._run(q0, lambda q, i: self.planner.plan_pose(
       c.goal_pose(cfg, pos[i], quat[i]), c.joint_state(q, cfg.joint_names), **self.plan_kwargs))
+    return self._add_ee(traj) if return_ee else traj
 
-  def plan_joint(self, q_start, q_goal) -> Trajectory:
-    """q_start (B,dof) -> q_goal (B,dof)."""
+  def plan_joint(self, q_start, q_goal, return_ee: bool = False) -> Trajectory:
+    """q_start (B,dof) -> q_goal (B,dof). return_ee as in `plan_pose`."""
     c, cfg = self._c, self.cfg
     q0, qg = c.as_tensor(q_start, cfg, 2), c.as_tensor(q_goal, cfg, 2)
-    return self._run(q0, lambda q, i: self.planner.plan_cspace(
+    traj = self._run(q0, lambda q, i: self.planner.plan_cspace(
       c.joint_state(qg[i], cfg.joint_names), c.joint_state(q, cfg.joint_names), **self.plan_kwargs))
+    return self._add_ee(traj) if return_ee else traj
 
   # -- internals --
+
+  def _add_ee(self, traj: Trajectory) -> Trajectory:
+    """Fill the end-effector fields by host FK (MuJoCo on the URDF cuRobo plans with), not cuRobo's kinematics,
+    so they match `MujocoFK` exactly. Outputs are torch on the planner device, like the joint fields."""
+    import torch
+
+    from .fk import MujocoFK
+
+    if self._fk is None:
+      self._fk = MujocoFK(self.cfg.urdf_path, self.cfg.joint_names, self.cfg.tool_frame)
+    t = traj.numpy()
+    pos, quat, vel = self._fk.ee_trajectory(t.q, t.dq)  # dq is zero past length[b], so vel is too
+    dev = traj.q.device
+    as_t = lambda x: torch.as_tensor(x, dtype=torch.float32, device=dev)  # noqa: E731
+    return dataclasses.replace(traj, ee_pos=as_t(pos), ee_quat=as_t(quat), ee_vel=as_t(vel))
 
   def _run(self, q0, plan_one) -> Trajectory:
     """plan_one(q_start (n,dof), index) -> cuRobo result for those problems."""

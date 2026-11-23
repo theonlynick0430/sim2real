@@ -129,3 +129,20 @@ def test_batch_plan_joint_partial_batch(batch_planner, fk, cfg):
   traj = batch_planner.plan_joint(q0, qg)
   assert traj.q.shape[0] == 5
   _assert_valid_traj(fk, cfg, traj, q0, lambda b, q_end: np.testing.assert_allclose(q_end, qg[b], atol=0.02))
+
+
+def test_plan_return_ee(batch_planner, fk, cfg):
+  """return_ee fills the planned tool trajectory: matches host FK of q, ends at the goal, zero velocity at rest."""
+  q0, _, _ = _targets(fk, 5, seed=11)
+  _, pos, quat = _targets(fk, 5, seed=12)
+  t = batch_planner.plan_pose(q0, pos, quat, return_ee=True).numpy()
+  assert batch_planner.plan_pose(q0, pos, quat).ee_pos is None  # opt-in only
+  T = t.q.shape[1]
+  assert t.ee_pos.shape == (5, T, 3) and t.ee_quat.shape == (5, T, 4) and t.ee_vel.shape == (5, T, 6)
+  for b in range(5):
+    p, r = fk(t.q[b])
+    np.testing.assert_allclose(t.ee_pos[b], p, atol=1e-5)
+    assert rotation_error(t.ee_quat[b], r).max() < 1e-4
+    end = t.length[b] - 1
+    assert np.linalg.norm(t.ee_pos[b, end] - pos[b]) < 1.5 * cfg.position_tolerance
+    np.testing.assert_allclose(t.ee_vel[b, end + 1:], 0, atol=1e-6)

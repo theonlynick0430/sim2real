@@ -97,3 +97,27 @@ def test_planning_is_self_contained():
         assert not (node.module or "").startswith("sim2real"), f"{f.name} imports {node.module}"
       if isinstance(node, ast.Import):
         assert not any(a.name.startswith("sim2real") for a in node.names), f"{f.name} imports sim2real"
+
+
+def test_ee_trajectory_pose_and_twist(yam_urdf):
+  """ee_trajectory pose == __call__, and its twist matches finite differences of the pose along a joint path."""
+  fk = MujocoFK(yam_urdf.path, yam_urdf.joint_names, yam_urdf.tool_link)
+  rng = np.random.default_rng(3)
+  qa, qb = fk.sample_q(2, rng, margin=0.1)
+  dt, h = 1e-3, 1e-6
+  s = np.linspace(0, 1, 50)[:, None]
+  q = qa + s * (qb - qa)
+  dq = np.broadcast_to((qb - qa) / (49 * dt), q.shape)
+  pos, quat, vel = fk.ee_trajectory(q[None], dq[None])  # leading batch dim is kept
+  assert pos.shape == (1, 50, 3) and quat.shape == (1, 50, 4) and vel.shape == (1, 50, 6)
+  p_ref, q_ref = fk(q)
+  np.testing.assert_allclose(pos[0], p_ref, atol=1e-12)
+  np.testing.assert_allclose(quat[0], q_ref, atol=1e-12)
+  for i in (0, 17, 49):  # central differences along dq
+    (p1, p0), (r1, r0) = zip(fk(q[i] + h * dq[i]), fk(q[i] - h * dq[i]))
+    np.testing.assert_allclose(vel[0, i, :3], (p1[0] - p0[0]) / (2 * h), rtol=1e-5, atol=1e-6)
+    dquat = np.zeros(3)  # angular velocity from the quaternion difference, world (= base) axes
+    mujoco.mju_subQuat(dquat, r1[0], r0[0])  # body-frame rotation vector r0 -> r1
+    R = np.zeros(9)
+    mujoco.mju_quat2Mat(R, q_ref[i])
+    np.testing.assert_allclose(vel[0, i, 3:], R.reshape(3, 3) @ dquat / (2 * h), rtol=1e-5, atol=1e-6)

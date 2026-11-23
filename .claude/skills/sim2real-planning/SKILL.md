@@ -55,6 +55,11 @@ bmp = GpuMotionPlanner(cfg.replace(max_batch_size=32), batch=True)   # BatchMoti
     `dq`/`ddq` are 0.
   - `success` is `(B,)`. A failed problem whose cuRobo result is `None` gets `q = q_start` with
     `length = 1`.
+  - `plan_pose(..., return_ee=True)` / `plan_joint(..., return_ee=True)` also fill the planned tool-frame
+    trajectory in the base frame: `ee_pos (B,T,3)`, `ee_quat (B,T,4)` wxyz, `ee_vel (B,T,6)` = [linear,
+    angular] (zero past `length[b]`). It is computed by host FK (`MujocoFK.ee_trajectory`, MuJoCo on the
+    exported URDF), not cuRobo, so it matches `MujocoFK` exactly; not included in `solve_time`. Off by
+    default (fields are `None`); cost is ~B·T host FK + Jacobian calls.
 - **Batch sizing:**
   - `GpuIK` handles at most `cfg.max_batch_size` targets per call.
   - The batched planner always solves exactly `max_batch_size` problems. Smaller batches are padded with
