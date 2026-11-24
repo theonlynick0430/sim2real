@@ -58,6 +58,26 @@ traj.q, traj.dq, traj.ddq, traj.dt, traj.length, traj.success   # (B, T, dof) at
 ```
 `sim2real/planning/` imports nothing else from sim2real except `adapters.py`, so it can be moved out as a package.
 
+**6. Motor reference profiles for dyno experiments (Linux + NVIDIA GPU: uses the planner)** — YAM trajectories
+composed of planned skills (`joint_move` under computed torque, `ee_move` under OSC) with a payload on the tool
+whose mass and center of mass vary, recorded per motor at 500 Hz:
+```bash
+python examples/motor_profiles.py --out data/profiles --num-trajs 200            # generate a dataset
+python examples/motor_profiles.py --out data/profiles --num-trajs 200 --resume   # continue a stopped run
+python examples/motor_profiles.py --visualize --no-record --num-trajs 5          # watch, write nothing
+```
+- `--joint-weight` / `--ee-weight` set the skill mix; `--help` lists the payload, margin and speed options.
+- Each `traj_XXXXX.npz` holds `t`, `q`, `dq`, `tau_motor`, `tau_ext` (per arm joint; Nm at the joint output),
+  `skill` (index into the skill list, -1 while pausing) and `meta` (JSON: skill composition, payload per
+  skill, motor per joint). `session.json` lists every trajectory and is written on success, failure or Ctrl-C.
+- The simulated motors are ideal: reflected rotor inertia (armature), no joint friction.
+- `tau_ext` is the torque the rest of the arm and the payload put on the motor's output. Rotor inertia counts
+  as part of the motor and is not in it (`tau_motor = armature * qacc - tau_ext`): on a dyno, drive the motor
+  along `q`/`dq` while the load side applies `tau_ext`; an ideal motor then needs `tau_motor`.
+- In the viewer the orange sphere on the tool is centered on the payload's center of mass; its opacity is the
+  mass relative to `--payload-mass-max`.
+- About 2.5 s of wall time per simulated second (one world, stepped from the host), i.e. ~15 s per trajectory.
+
 > **macOS note:** Python 3.12 ignores `.pth` files that carry the `hidden` flag. On some setups the editable install ends up hidden, and then `import sim2real` fails. The examples add the repo to `sys.path` themselves, and pytest sets `pythonpath`.
 
 ## Agent skills
@@ -99,6 +119,10 @@ sim2real/
              ik.py       GpuIK: batched cuRobo IK        motion.py  GpuMotionPlanner: plan_pose / plan_joint
              fk.py       host FK of the URDF via MuJoCo  frames.py  world <-> base pose transforms
              adapters.py RobotConfig -> URDF + PlannerConfig
+  profiles/  scene.py    robot-only scene + payload body on the tool; set_payload (mass, COM)
+             sampling.py start configs, joint / ee goals, payloads; Checker (limits, contacts, singularity)
+             skills.py   ProfileGenerator: plan + roll out joint_move / ee_move, record q, dq, tau_motor, tau_ext
+             session.py  traj_XXXXX.npz + session.json, resume
 ```
 
 ## Key design decisions

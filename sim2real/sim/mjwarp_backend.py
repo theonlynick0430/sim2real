@@ -6,6 +6,7 @@ capture is device-specific. Surface:
   reset()                       -> all worlds to the scene's home keyframe
   step1() / step2()             -> split physics step; controllers run in between on *current* M, J, bias
   kinematics()                  -> refresh positions (site/body poses) without stepping
+  reload_model()                -> re-upload the host MjModel after an in-place edit (e.g. a payload change)
   robot_state(needs, arm=0)     -> RobotState of one arm (warp arrays, backend device)
   set_arm_ctrl(cmd, arm=0)      -> write (nworld, n) command into that arm's actuators
   set_gripper(value, arm=0)     -> gripper ctrl, scalar or (nworld,) array
@@ -121,6 +122,14 @@ class MjWarpBackend:
   # --- physics -----------------------------------------------------------------
   # Every MJWarp call runs under ScopedDevice: MJWarp launches on the current Warp device, which is cuda:0 on a GPU
   # machine even when this backend lives on the CPU.
+  def reload_model(self) -> None:
+    """Re-upload `self.mjm` after editing it in place on the host (e.g. a body's mass or position, followed by
+    `mujoco.mj_setConst`). Sizes must be unchanged. `d` is kept; captured CUDA graphs are dropped because they
+    bake in the old model arrays."""
+    with wp.ScopedDevice(self.device):
+      self.m = mjw.put_model(self.mjm)
+    self._graphs.clear()
+
   def reset_data(self, world_mask: wp.array | None = None) -> None:
     """Masked keyframe reset of `d` only (no forward): `world_mask` (nworld,) int keyframe ids, -1 = keep.
 
@@ -264,6 +273,16 @@ class MjWarpBackend:
     if quat is not None:
       qpos[:, q0 + 3 : q0 + 7] = broadcast(quat, (self.nworld, 4))
     qvel[:, v0 : v0 + 6] = 0
+    self.d.qpos.assign(qpos)
+    self.d.qvel.assign(qvel)
+    self.forward()
+
+  def set_arm_state(self, q: np.ndarray, dq: np.ndarray | None = None, arm: int = 0) -> None:
+    """Set one arm's joint positions (and velocities, default 0) in every world and run forward."""
+    view = self.views[arm]
+    qpos, qvel = self.d.qpos.numpy(), self.d.qvel.numpy()
+    qpos[:, view.qpos_adr] = broadcast(q, (self.nworld, view.ndof))
+    qvel[:, view.dof_adr] = broadcast(0.0 if dq is None else dq, (self.nworld, view.ndof))
     self.d.qpos.assign(qpos)
     self.d.qvel.assign(qvel)
     self.forward()

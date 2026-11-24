@@ -16,6 +16,7 @@ A frozen dataclass; everything the backend or a controller needs. Fields:
 | `arm_joints` / `arm_actuators` | controlled joints (hinge/slide only) and one actuator each, same order |
 | `tcp_site` | end-effector frame used for J and OSC |
 | `home_qpos`, `torque_limits` | length `ndof`; limits clamp every controller output |
+| `motor_models` | motor part name per arm joint (optional; dataset metadata, e.g. YAM `DM4340` x3 + `DM4310` x3) |
 | `kp`, `kd` | default joint gains (POSITION mode actuators, `JointPD` defaults, impedance damping ratio) |
 | `gripper_actuator`, `gripper_open`, `gripper_closed` | single position actuator for the gripper (optional); `gripper_ctrl(closed)` returns the ctrl value |
 | `actuator_mode` | `ActuatorMode.TORQUE` (motor, needed by OSC/impedance) or `POSITION` (implicit PD) |

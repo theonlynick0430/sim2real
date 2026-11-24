@@ -19,6 +19,7 @@ YAM = register_robot(
     home_qpos=(0.0, 1.047, 1.047, 0.0, 0.0, 0.0),
     # DM4340 (joints 1-3) and DM4310 (joints 4-6) force ranges from the MJCF.
     torque_limits=(28.0, 28.0, 28.0, 10.0, 10.0, 10.0),
+    motor_models=("DM4340",) * 3 + ("DM4310",) * 3,
     kp=(40.0, 40.0, 40.0, 20.0, 10.0, 10.0),
     kd=(2.5, 2.5, 2.5, 0.5, 1.0, 1.0),
     gripper_actuator="gripper",

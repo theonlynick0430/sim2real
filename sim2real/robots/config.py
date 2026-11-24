@@ -34,6 +34,7 @@ class RobotConfig:
   tcp_site: str  # site used as the end-effector / TCP frame
   home_qpos: tuple[float, ...]  # arm joint positions at home (len == ndof)
   torque_limits: tuple[float, ...]  # |tau| limits per arm joint [Nm]
+  motor_models: tuple[str, ...] = ()  # motor part name per arm joint (documentation / dataset metadata)
   # Default gains used when converting to POSITION mode / for JointPD defaults.
   kp: tuple[float, ...] = ()
   kd: tuple[float, ...] = ()
@@ -53,7 +54,7 @@ class RobotConfig:
     for field in ("arm_actuators", "home_qpos", "torque_limits"):
       if len(getattr(self, field)) != n:
         raise ValueError(f"{self.name}: len({field}) != len(arm_joints) = {n}")
-    for field in ("kp", "kd"):
+    for field in ("kp", "kd", "motor_models"):
       if getattr(self, field) and len(getattr(self, field)) != n:
         raise ValueError(f"{self.name}: len({field}) != {n}")
 

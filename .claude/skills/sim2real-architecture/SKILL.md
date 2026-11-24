@@ -35,6 +35,7 @@ RobotConfig ──► Scene (MjSpec → MjModel) ──► MjWarpBackend (cuda |
 | `sim2real/envs/` | batched `PickPlaceEnv`, scripted policies | `sim2real-envs` |
 | `sim2real/utils.py` | shared host helpers: `broadcast`, `quat_to_mat` (pose math goes through MuJoCo `mju_*`) | — |
 | `sim2real/planning/` | GPU IK / motion planning on cuRoboV2 (no collision), MJCF→URDF export. Self-contained: only `adapters.py` may import other sim2real modules (enforced by `tests/test_planning_urdf.py`). Torch/cuRobo imported lazily; Linux + CUDA only | `sim2real-planning` |
+| `sim2real/profiles/` | motor reference profiles for dyno experiments: robot-only scene with a payload body (`scene.py`), goal / payload sampling and validity checks (`sampling.py`), planned `joint_move` / `ee_move` skills rolled out and recorded (`skills.py`), npz + `session.json` + resume (`session.py`). Needs the planner (CUDA) | — |
 | `examples/` | runnable scripts (below); `_scenes.py` / `_expert.py` are shared helpers, not entry points | — |
 
 ## Invariants (do not break)
@@ -60,7 +61,21 @@ python examples/scripted_pick.py --headless        # pick-and-place, expect succ
 python examples/bimanual_relay.py --headless       # two-arm relay, expect success=1.000, ~5 or ~10 mm
 python examples/controller_viewer.py --headless --seconds 5   # osc tracking error ~0.008
 python examples/gpu_rollout.py --nworld 16 --device cpu   # batched env path on a Mac
+python examples/motor_profiles.py --no-record --num-trajs 3   # GPU + cuRobo only: 3 trajectories, none skipped
 ```
+
+Motor profiles, things that are easy to get wrong:
+- `tau_ext = armature * qacc - qfrc_actuator - qfrc_passive - qfrc_constraint` on the arm dofs: rotor inertia
+  belongs to the motor, not the load (the passive / constraint terms are zero for YAM: no joint friction).
+  `tests/test_profiles.py` checks it against MuJoCo C. Motors are always ideal; there is no friction option.
+- Payload changes edit the host `MjModel` in place, then `mj_setConst` + `MjWarpBackend.reload_model()`.
+- The planner has no collision checking; `profiles.sampling.Checker` rejects goals / plans with any MuJoCo
+  contact (self or table; link_3 / link_5 can collide inside the joint limits), near joint limits or (for ee
+  moves) singularities. After the rollout, any contact in the sim (`d.nacon`) or any torque saturation rejects it.
+- Controller gains are moderate (computed torque kp = 100, OSC class defaults 400 / 150; acceleration units).
+  The model is exact, so feedforward does the tracking. If joint friction is ever added to the model these
+  leave a large deadband on the light wrist joints (0.1 Nm against kp = 400 gave ~0.1 rad).
+- Sampled goals / payloads depend only on (seed, index, attempt); cuRobo plans are not bit-reproducible.
 
 Run from the repo root inside the conda env (`conda env create -f environment.yml && conda activate sim2real &&
 uv pip install -e ".[dev]"`). Add dependencies to `pyproject.toml`, not to `environment.yml` (conda only provides
@@ -75,6 +90,7 @@ Python and uv).
 | `bimanual_relay.py` | two-arm cube handoff | ✅ |
 | `gpu_rollout.py [--bimanual]` | batched `PickPlaceEnv` + expert, success and steps/s | — |
 | `gpu_bench.py --nworld ...` | throughput / memory sweep | — |
+| `motor_profiles.py --out DIR --num-trajs N [--resume]` | per-motor reference profiles (q, dq, tau_motor, tau_ext) from planned skills with varied payloads; CUDA + cuRobo only | `--visualize` (`--no-record` to only watch) |
 
 All take `--device` (default: CUDA if present, else Warp-CPU). Viewer scripts take `--headless`; on macOS run
 them with `mjpython`. Viewing is display-only and wrapped by `examples._scenes.Viewer(backend, headless)`: each

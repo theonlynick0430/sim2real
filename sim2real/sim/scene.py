@@ -154,6 +154,24 @@ def as_mounts(robots: RobotConfig | RobotMount | Sequence[RobotMount]) -> tuple[
   return tuple(robots)
 
 
+def compile_with_home_key(spec: mujoco.MjSpec, mounts: Sequence[RobotMount], **key_fields) -> mujoco.MjModel:
+  """Compile `spec` with one scene-level "home" keyframe (keyframes must cover full nq/nu): arms at
+  `home_qpos`, grippers open. `key_fields` are extra keyframe fields (e.g. mocap `mpos` / `mquat`)."""
+  mjm = spec.compile()
+  qpos = mjm.qpos0.copy()
+  ctrl = np.zeros(mjm.nu)
+  for robot in (m.resolved for m in mounts):
+    for joint, q in zip(robot.arm_joints, robot.home_qpos):
+      qpos[mjm.joint(joint).qposadr[0]] = q
+    if robot.actuator_mode == ActuatorMode.POSITION:
+      for actuator, q in zip(robot.arm_actuators, robot.home_qpos):
+        ctrl[mjm.actuator(actuator).id] = q
+    if robot.gripper_actuator:
+      ctrl[mjm.actuator(robot.gripper_actuator).id] = robot.gripper_open
+  spec.add_key(name="home", qpos=qpos.tolist(), ctrl=ctrl.tolist(), **key_fields)
+  return spec.compile()
+
+
 def build_scene(
   robots: RobotConfig | RobotMount | Sequence[RobotMount], cfg: SceneConfig = SceneConfig()
 ) -> Scene:
@@ -192,19 +210,5 @@ def build_scene(
   goal.add_geom(type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[half, 0, 0], rgba=[0.2, 0.8, 0.2, 0.4],
                 contype=0, conaffinity=0, group=1)
 
-  # One scene-level "home" keyframe (keyframes must cover full nq/nu).
-  mjm = spec.compile()
-  qpos = mjm.qpos0.copy()
-  ctrl = np.zeros(mjm.nu)
-  for robot in (m.resolved for m in mounts):
-    for joint, q in zip(robot.arm_joints, robot.home_qpos):
-      qpos[mjm.joint(joint).qposadr[0]] = q
-    if robot.actuator_mode == ActuatorMode.POSITION:
-      for actuator, q in zip(robot.arm_actuators, robot.home_qpos):
-        ctrl[mjm.actuator(actuator).id] = q
-    if robot.gripper_actuator:
-      ctrl[mjm.actuator(robot.gripper_actuator).id] = robot.gripper_open
-  spec.add_key(name="home", qpos=qpos.tolist(), ctrl=ctrl.tolist(),
-               mpos=list(cfg.goal_pos), mquat=[1, 0, 0, 0])
-  mjm = spec.compile()
+  mjm = compile_with_home_key(spec, mounts, mpos=list(cfg.goal_pos), mquat=[1, 0, 0, 0])
   return Scene(mjm=mjm, mounts=mounts, cfg=cfg)
