@@ -185,7 +185,7 @@ sim2real/
 - **Host syncs:** `MjWarpBackend.body_pos`, `set_body_free_pose`, and `overflow()` read device memory. They are for scripts only and should not be called in the RL loop.
 - **Check `overflow()` after any change to contacts or buffers.** A dropped contact does not fail the task: with the CCD pool at zero the expert still places the cube (the sphere and capsule finger contacts carry the grasp) while the box-box contacts silently vanish. `overflow()["ccd"]`, `["contacts"]` and `["nefc"]` are the bits that mean something was dropped; `tests/test_env.py` asserts all three are clear after an expert episode. `ITERATIONS` only means the solver hit `solver_iterations`, which the bimanual relay does routinely.
 - **Precision:** physics is float32 (on CUDA and Warp-CPU alike). Λ uses a damped inverse (`lambda_damping`), and torques are clamped to actuator limits.
-- **Friction:** YAM joints have `frictionloss=0.1`, which creates a steady-state deadband, so the OSC gains default high (`kp_pos=400`). With friction removed, OSC error is below 0.3 mm.
+- **Friction:** YAM joints have no joint friction (`frictionloss=0`). Menagerie's model set an unidentified placeholder of 0.1 Nm on every joint; it was removed here until friction is measured on the real motors. OSC error is below 0.3 mm.
 
 ## Status
 

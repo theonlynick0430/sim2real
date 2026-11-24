@@ -6,7 +6,7 @@
   <default>
     <default class="yam">
       <position inheritrange="1"/>
-      <joint frictionloss="0.1" axis="0 0 1"/>
+      <joint frictionloss="0" axis="0 0 1"/>
       <default class="dm4340">
         <joint armature="0.032"/>
         <position kp="40" kv="2.5" forcerange="-28 28"/>
@@ -25,7 +25,7 @@
         </default>
       </default>
       <default class="finger">
-        <joint type="slide" armature="0.1" frictionloss="0.1"/>
+        <joint type="slide" armature="0.1" frictionloss="0"/>
         <position ctrlrange="0.0 0.041" kp="100" kv="10" inheritrange="0"/>
       </default>
     </default>

@@ -35,7 +35,8 @@ Robotics](https://i2rt.com/):
 3. Loaded the URDF into MuJoCo and saved a corresponding MJCF.
 4. Added home keyframe.
 5. Added tracking light.
-6. Add frictionloss (not identified).
+6. Add frictionloss (not identified). **Changed in this repo:** set back to 0 on all joints (arm and fingers),
+   since the 0.1 Nm placeholder was never identified; to be replaced by values measured on the real motors.
 7. Added armature based on reflected inertia values provided by the manufacturer.
 8. Switched to implicitfast and used position actuators with kp/kv semantics.
 

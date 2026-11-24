@@ -59,7 +59,7 @@ code. Use `wp.types.matrix(shape=(6, n))` for J-shaped types.
   `v_des`/`a_des` = `target_vel`/`target_acc` `(nworld, 6)` world-frame TCP twist [linear, angular] and its
   derivative; `set_target(pos, quat, vel=None, acc=None)` resets them to 0 when omitted (pose regulation),
   so pass them every call when tracking a trajectory (e.g. planner `return_ee=True` output).
-  Defaults: `kp_pos=400`, `kp_rot=150` (high because YAM joint friction 0.1 makes a deadband), `ε=1e-3`.
+  Defaults: `kp_pos=400`, `kp_rot=150` (tuned when the YAM model still had 0.1 Nm of joint friction; it has none now), `ε=1e-3`.
 
 ## Adding a controller
 
